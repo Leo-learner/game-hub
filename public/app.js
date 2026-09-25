@@ -97,10 +97,9 @@ async function loadSaves() {
   } catch (e) { if (S.user) toast(errMsg(e)); }
   S.savesLoading = false; render();
 }
-let authProbe = false;
 client.onAuthChange(user => {
-  // 会话过期（接口返回 401）时 SDK 会通知这里；登录/退出流程也会触发，这里只做同步。
-  if (authProbe || (S.user?.id ?? null) === (user?.id ?? null)) return;
+  // 会话缺失或过期（接口返回 401 AUTH_REQUIRED）时 SDK 会通知这里；登录/退出流程也会触发，这里只做同步。
+  if ((S.user?.id ?? null) === (user?.id ?? null)) return;
   S.user = user; if (!user) { S.saves = []; S.needsReload = false; if (S.route.name === 'profile') go({ name: 'home' }); } render();
 });
 
@@ -226,19 +225,13 @@ async function changePw() {
   s.err = err;
   if (Object.keys(err).length) return render();
   s.busy = 'pw'; render();
-  // 原密码错误也返回 401，SDK 会把它当作已退出；这里暂停同步，随后用 auth.me() 核实会话是否真的失效。
-  authProbe = true;
-  let unauthorized = false;
   try { await client.auth.changePassword(s.old, s.nw); Object.assign(s, { old: '', nw: '', nw2: '', err: {} }); toast('密码已修改，其他设备已退出登录'); }
   catch (e) {
-    unauthorized = e instanceof ApiError && e.status === 401;
     s.err = e instanceof ApiError && e.code === 'INVALID_CREDENTIALS' ? { old: e.message } : { nw: errMsg(e) };
+    // 会话已失效时 SDK 已通过 onAuthChange 清空登录状态并返回首页，这里只补一条提示。
+    if (e instanceof ApiError && e.code === 'AUTH_REQUIRED') toast('登录已失效，请重新登录');
   }
-  finally { authProbe = false; }
   s.busy = ''; render();
-  if (unauthorized && !(await client.auth.me().catch(() => S.user)) && S.user) {
-    S.user = null; S.saves = []; toast('登录已失效，请重新登录'); go({ name: 'home' });
-  }
 }
 function play(slug, fs) { go({ name: 'play', slug }, { fs }); }
 function toggleFs() { S.fullscreen = !S.fullscreen; syncBrowserFullscreen(); render(); }
