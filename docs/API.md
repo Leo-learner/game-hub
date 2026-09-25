@@ -184,6 +184,7 @@ ApiError 包含 status、code、message、details、requestId。保存参数还�
 ```js
 const unsubscribe = client.onAuthChange(user => {
   // 更新你自己的登录界面；切换账号时清理游戏中上一位玩家的内存状态。
+  // 会话缺失或过期（401 AUTH_REQUIRED）时回调 null；密码错误（401 INVALID_CREDENTIALS）不影响登录状态，不会触发。
 });
 const saver = client.createDebouncedSaver('example-clicker', 'auto', error => {
   // 必须向用户反馈失败，避免显示“已保存”。
