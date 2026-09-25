@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/**/*.ts",
+    "scripts/admin.ts",
+    "scripts/generate-contract.ts",
+    "scripts/mcp-admin.ts"
+  ],
+  "exclude": [
+    "test",
+    "node_modules",
+    "dist"
+  ]
+}

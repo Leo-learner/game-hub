@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Game Hub 存档接入示例</title>
+<style>body{font:16px/1.65 system-ui;margin:40px auto;padding:0 20px;max-width:680px}button,input{font:inherit;margin:5px;padding:6px}output{font-size:40px}fieldset{margin:22px 0}#status{white-space:pre-wrap}small{color:#555}</style>
+<h1>存档接入示例</h1><p>这是后端联调示例。游客可直接玩；注册登录后可保存进度。正式界面由你自行设计。</p>
+<p id="account">检查登录状态…</p>
+<p>点击次数：<output id="score">0</output></p>
+<button id="click">点击 +1</button>
+<fieldset><legend>账号联调</legend><label>用户名 <input id="username" autocomplete="username" minlength="3" maxlength="20"></label>
+<label>密码 <input id="password" type="password" autocomplete="current-password" minlength="8"></label>
+<button id="register">注册</button><button id="login">登录</button><button id="logout">退出</button></fieldset>
+<fieldset><legend>云存档联调</legend><label>槽位 <input id="slot" value="auto"></label><button id="load">读取存档</button><button id="save">保存进度</button><button id="remove">删除存档</button></fieldset>
+<p id="status" role="status"></p><small>不使用浏览器本地存储；刷新会丢弃未保存的点击次数。</small>
+<script type="module">
+import {createClient} from '/sdk/game-hub.js';
+const client=createClient();const slug=location.pathname.split('/')[2];
+let score=0,revision=0,user=null,knownSlot='auto',loaded=false;
+const $=id=>document.getElementById(id);
+function render(){$('score').textContent=String(score);$('account').textContent=user?'已登录：'+user.displayName:'游客模式：进度仅保留在当前页面';}
+function notify(message){$('status').textContent=message;}
+function reset(){score=0;revision=0;loaded=false;render();}
+client.onAuthChange(next=>{if(user&&user.id!==next?.id)reset();user=next;render();});
+async function load(){const value=await client.saves.load(slug,$('slot').value);knownSlot=$('slot').value;loaded=true;revision=value?.revision??0;if(value)score=Number(value.data.score??0);render();notify(value?'已读取云存档，版本 '+revision:'此槽位还没有云存档，可保存当前进度。');}
+async function run(task){try{await task();}catch(e){notify(e.code==='SAVE_CONFLICT'?'存档已在其他设备更新，请先读取后再保存。':e.message);}}
+$('click').onclick=()=>{score++;render();};
+$('register').onclick=()=>run(async()=>{await client.auth.register({username:$('username').value,password:$('password').value});$('password').value='';await load();notify('注册成功，可以保存当前进度。');});
+$('login').onclick=()=>run(async()=>{await client.auth.login({username:$('username').value,password:$('password').value});$('password').value='';await load();});
+$('logout').onclick=()=>run(async()=>{await client.auth.logout();reset();notify('已退出，游客进度不会保存。');});
+$('load').onclick=()=>run(load);
+$('save').onclick=()=>run(async()=>{if(!user)throw Error('请先注册或登录后使用云存档。');if(!loaded||knownSlot!==$('slot').value)throw Error('请先读取此槽位，再保存进度。');const saved=await client.saves.save(slug,knownSlot,{data:{score},schemaVersion:1,expectedRevision:revision});revision=saved.revision;notify('已保存到云端，版本 '+revision);});
+$('remove').onclick=()=>run(async()=>{if(!loaded||knownSlot!==$('slot').value||!revision)throw Error('请先读取需要删除的存档。');await client.saves.remove(slug,knownSlot,revision);revision=0;notify('云存档已删除，当前页面进度可重新保存。');});
+await run(async()=>{user=await client.auth.me();render();if(user)await load();});
+</script></html>

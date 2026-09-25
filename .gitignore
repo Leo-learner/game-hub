@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.work/
+data/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+public/sdk/
+docs/deployment-private/
+
+.playwright-cli/
+output/playwright/

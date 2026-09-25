@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "game-hub": {
+      "type": "http",
+      "url": "https://games.dkz12345.com/mcp",
+      "headers": { "Authorization": "Bearer ${GAME_HUB_MCP_TOKEN}" }
+    }
+  }
+}

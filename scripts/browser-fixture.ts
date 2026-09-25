@@ -1,0 +1,20 @@
+import { mkdir,mkdtemp,rm,writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { createConfig } from '../src/config.js';
+import { openDb,migrate } from '../src/db/index.js';
+import { buildApp } from '../src/app.js';
+await mkdir('.work',{recursive:true});
+const dataDir=await mkdtemp(path.resolve('.work/browser-'));
+const c=createConfig({dataDir,logger:false,port:13220,publicOrigin:'http://127.0.0.1:13220'},{});
+const db=openDb(dataDir);migrate(db);db.close();
+const app=await buildApp(c);
+app.services.games.create({slug:'example-clicker',title:'存档接入示例'});
+const release=await app.services.releases.importDirectory('example-clicker',path.resolve('examples/example-clicker'));
+const game=app.services.games.publish('example-clicker',release.id);
+await app.listen({host:'127.0.0.1',port:c.port});
+const result={url:c.publicOrigin+game.launchUrl,origin:c.publicOrigin,dataDir};
+await writeFile('.work/browser-fixture.json',JSON.stringify(result,null,2));
+console.log(JSON.stringify(result));
+let closing=false;
+async function close(){if(closing)return;closing=true;await app.close();await rm(dataDir,{recursive:true,force:true});}
+process.on('SIGINT',()=>void close());process.on('SIGTERM',()=>void close());

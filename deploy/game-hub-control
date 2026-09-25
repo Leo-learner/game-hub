@@ -1,0 +1,51 @@
+#!/usr/bin/python3 -I
+"""Root-owned, fixed operations for this website. Never accepts commands or paths."""
+import json
+import os
+import subprocess
+import sys
+
+ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "SYSTEMD_COLORS": "0"}
+
+
+def run(args, timeout=20):
+    return subprocess.run(args, check=False, capture_output=True, text=True, timeout=timeout, env=ENV)
+
+
+def main():
+    args = sys.argv[1:]
+    if os.geteuid() != 0:
+        raise ValueError("root required")
+    if args == ["status"]:
+        result = {}
+        for unit in ("game-hub.service", "game-hub-mcp.service", "game-hub-backup.timer"):
+            state = run(["/usr/bin/systemctl", "show", unit, "--property=ActiveState,SubState,Result", "--no-pager"])
+            result[unit] = dict(line.split("=", 1) for line in state.stdout.splitlines() if "=" in line)
+        print(json.dumps(result))
+    elif args == ["restart"]:
+        proc = run(["/usr/bin/systemctl", "restart", "game-hub.service"])
+        if proc.returncode:
+            raise ValueError("website restart failed")
+        print('{"requested":true}')
+    elif len(args) == 3 and args[0] == "logs":
+        if not args[1].isascii() or not args[2].isascii() or not args[1].isdigit() or not args[2].isdigit():
+            raise ValueError("invalid limits")
+        lines, minutes = int(args[1]), int(args[2])
+        if not 1 <= lines <= 200 or not 1 <= minutes <= 1440:
+            raise ValueError("invalid limits")
+        proc = run(["/usr/bin/journalctl", "--unit=game-hub.service", "--no-pager", "--output=cat",
+                    "--lines=" + str(lines), "--since=" + str(minutes) + " minutes ago"])
+        if proc.returncode:
+            raise ValueError("journal unavailable")
+        # Bound text even when a single log line is unusually large.
+        print(proc.stdout[-48000:])
+    else:
+        raise ValueError("allowed: status | logs LINES MINUTES | restart")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, subprocess.TimeoutExpired):
+        print("game-hub-control: operation rejected or unavailable", file=sys.stderr)
+        sys.exit(1)

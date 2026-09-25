@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily Game Hub backup at 04:00 Asia/Shanghai
+[Timer]
+OnCalendar=*-*-* 20:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+[Install]
+WantedBy=timers.target

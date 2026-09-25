@@ -1,0 +1,26 @@
+[Unit]
+Description=Game Hub maintenance MCP
+After=network.target game-hub.service
+[Service]
+Type=simple
+User=gamehub
+Group=www-data
+WorkingDirectory=/opt/apps/game-hub/current
+EnvironmentFile=/etc/game-hub.env
+Environment=MCP_PORT=3221
+ExecStart=/usr/bin/node --max-old-space-size=96 dist/src/mcp/server.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=130
+KillSignal=SIGTERM
+UMask=0027
+# sudo is restricted to game-hub-control; NoNewPrivileges would disable it.
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/game-hub
+MemoryHigh=160M
+MemoryMax=192M
+[Install]
+WantedBy=multi-user.target

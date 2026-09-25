@@ -1,0 +1,8 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Game Hub — 前端预留页</title>
+<h1>Game Hub 后端已就绪</h1>
+<p>这里是前端预留页。你可以直接替换此目录的页面，使用自己选择的框架、布局和交互。</p>
+<ul><li><a href="/docs">交互式接口文档</a></li><li><a href="/openapi.json">OpenAPI 接口定义</a></li><li><a href="/api/v1/games">游戏目录 API</a></li></ul>
+<h2>接入示例</h2><ul id="games"></ul>
+<script>fetch('/api/v1/games').then(r=>r.json()).then(({items})=>{for(const game of items){const li=document.createElement('li');const a=document.createElement('a');a.href=game.launchUrl;a.textContent=game.title;li.append(a);document.getElementById('games').append(li);}}).catch(()=>{});</script></html>

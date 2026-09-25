@@ -1,0 +1,2 @@
+# The root-owned helper validates every argument and only controls Game Hub.
+gamehub ALL=(root) NOPASSWD: /usr/local/sbin/game-hub-control
