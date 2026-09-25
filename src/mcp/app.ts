@@ -48,7 +48,7 @@ export async function buildMcpApp(config: Config, options: {control?: Control; a
   });
   app.get('/healthz', async () => ({ok: true}));
   app.get('/mcp/healthz', async () => ({ok: true}));
-  app.route({method: ['POST', 'GET', 'DELETE'], url: '/mcp', handler: async (req, reply) => {
+  app.route({method: 'POST', url: '/mcp', handler: async (req, reply) => {
     const actor = store.authenticate(bearer(req.headers.authorization));
     const server = createMcpServer({db, config, store, games, auth, operations}, actor);
     const transport = new NodeStreamableHTTPServerTransport({sessionIdGenerator: undefined, enableJsonResponse: true});
@@ -59,6 +59,9 @@ export async function buildMcpApp(config: Config, options: {control?: Control; a
     reply.raw.setHeader('X-Content-Type-Options', 'nosniff');
     try {await transport.handleRequest(req.raw, reply.raw, req.body);} finally {await server.close();}
   }});
+  // Stateless: no session to resume or end and no server-initiated messages, so no SSE stream to offer (spec: 405).
+  app.route({method: ['GET', 'DELETE'], url: '/mcp', handler: async (_req, reply) =>
+    reply.code(405).header('Allow', 'POST').send({error: {code: 'METHOD_NOT_ALLOWED', message: '无状态 MCP 端点只接受 POST'}})});
   // Streaming parser: ReleaseService enforces the compressed/uncompressed size caps.
   app.addContentTypeParser('application/zip', (request, payload, done) => done(null, payload));
   app.put<{Params: {id: string}}>('/mcp/uploads/:id', {

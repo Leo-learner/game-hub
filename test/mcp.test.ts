@@ -90,6 +90,19 @@ test('HTTP rejects anonymous, wrong host/origin, cookie auth and oversized JSON;
   } finally {await f.close();}
 });
 
+test('stateless endpoint answers GET/DELETE with 405 instead of holding an SSE stream open', async () => {
+  const f = await fixture();
+  try {
+    const {secret} = f.token();
+    assert.equal((await fetch(f.address + '/mcp', {headers: {accept: 'text/event-stream'}, signal: AbortSignal.timeout(5000)})).status, 401);
+    for (const method of ['GET', 'DELETE']) {
+      const r = await fetch(f.address + '/mcp', {method, headers: f.headers(secret, {accept: 'text/event-stream'}), signal: AbortSignal.timeout(5000)});
+      assert.equal(r.status, 405); assert.equal(r.headers.get('allow'), 'POST');
+      assert.equal((await r.json() as any).error.code, 'METHOD_NOT_ALLOWED');
+    }
+  } finally {await f.close();}
+});
+
 test('ZIP ticket is one-use and creates a draft; publishing and rollback preserve versions', async () => {
   const f = await fixture();
   try {
