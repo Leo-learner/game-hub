@@ -52,3 +52,49 @@ test('a save response arriving after logout cannot update the new session', {tim
   finish(Response.json({slot:'auto',schemaVersion:1,revision:1,updatedAt:new Date().toISOString(),sizeBytes:12}));
   await rejected;
 });
+
+const owner={id:'owner-a',username:'owner',displayName:'Owner',role:'player',createdAt:new Date().toISOString()};
+const unauthorized=(code:string)=>Response.json({error:{code,message:code}},{status:401});
+
+test('a wrong old password keeps the session, auth state and in-flight saves', {timeout:3000}, async()=>{
+  let finish!:(value:Response)=>void, started!:()=>void;
+  const waiting=new Promise<void>(resolve=>{started=resolve;});
+  const response=new Promise<Response>(resolve=>{finish=resolve;});
+  let meCalls=0;
+  const client=createClient({fetch:async url=>{
+    const route=String(url);
+    if(route.endsWith('/auth/me')){meCalls++;return Response.json({user:owner});}
+    if(route.endsWith('/auth/password'))return unauthorized('INVALID_CREDENTIALS');
+    started();return response;
+  }});
+  assert.deepEqual(await client.auth.me(),owner);
+  const changes:unknown[]=[];client.onAuthChange(user=>changes.push(user));
+  const pending=client.saves.save('clicker','auto',{data:{score:7},schemaVersion:1,expectedRevision:0});
+  await waiting;
+  await assert.rejects(client.auth.changePassword('wrong','new-password'),{status:401,code:'INVALID_CREDENTIALS'});
+  finish(Response.json({slot:'auto',schemaVersion:1,revision:1,updatedAt:new Date().toISOString(),sizeBytes:12}));
+  assert.equal((await pending).revision,1);
+  assert.deepEqual(changes,[]);
+  assert.equal(meCalls,1);
+  assert.deepEqual(await client.auth.me(),owner);
+  assert.deepEqual(changes,[]);
+});
+
+test('only a missing session clears the user; a failed login leaves a guest logged out', {timeout:3000}, async()=>{
+  let user:typeof owner|null=null;
+  const client=createClient({fetch:async url=>{
+    const route=String(url);
+    if(route.endsWith('/auth/me'))return Response.json({user});
+    if(route.endsWith('/auth/login'))return unauthorized('INVALID_CREDENTIALS');
+    return unauthorized('AUTH_REQUIRED');
+  }});
+  const changes:unknown[]=[];client.onAuthChange(value=>changes.push(value));
+  assert.equal(await client.auth.me(),null);
+  await assert.rejects(client.auth.login({username:'owner',password:'wrong'}),{code:'INVALID_CREDENTIALS'});
+  await assert.rejects(client.saves.load('clicker','auto'),{code:'AUTH_REQUIRED'});
+  assert.deepEqual(changes,[null]);
+  user=owner;
+  assert.deepEqual(await client.auth.me(),owner);
+  await assert.rejects(client.auth.changePassword('old-password','new-password'),{code:'AUTH_REQUIRED'});
+  assert.deepEqual(changes,[null,owner,null]);
+});

@@ -31,8 +31,9 @@ export function createClient(options:ClientOptions={}) {
     const response=await fetcher(base+route,{...extra,method,headers,body:payload,credentials:'include'});
     const value=await response.json().catch(()=>null);
     if(!response.ok){
-      if(response.status===401)setUser(null);
       const err=value?.error;
+      // Only a missing/expired session means logged out; INVALID_CREDENTIALS (wrong password) leaves the session intact.
+      if(response.status===401&&err?.code==='AUTH_REQUIRED')setUser(null);
       throw new ApiError(response.status,err?.code??'HTTP_ERROR',err?.message??'请求失败',err?.details,value?.requestId);
     }
     return value as R;
