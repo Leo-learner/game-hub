@@ -191,16 +191,22 @@ input::placeholder { color: var(--ph); }
 .btn-bar.dim { height: 34px; color: var(--muted2); font-size: 12px; }
 .btn-bar.dim:hover { color: var(--fg); border-color: var(--ph); }
 .btn-bar .kbd, .btn-exitfs .kbd { color: var(--muted2); }
-.play-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-.strip { flex: none; display: flex; align-items: center; gap: 12px; padding: 0 18px; font-size: 13px; }
-.strip.guest { height: 36px; background: #1f1410; border-bottom: 1px solid #3a2219; }
-.strip.reload { height: 44px; gap: 14px; background: #122019; border-bottom: 1px solid #1f3a2b; }
+/* 标题区吃掉按钮之外的全部宽度，同时是容器：宽度不够时先藏版本号（本节末尾的 @container play-title） */
+.play-title { flex: 1; min-width: 0; container: play-title / inline-size; display: flex; align-items: baseline; gap: 12px; }
+.play-user { flex: none; }
+.play-user-name { max-width: 10em; }
+.strip { flex: none; display: flex; align-items: center; gap: 12px; padding: 6px 18px; font-size: 13px; line-height: 1.5; }
+.strip > span { min-width: 0; text-wrap: balance; }
+.strip > .ulink, .btn-reload { flex: none; white-space: nowrap; }
+.strip.guest { min-height: 36px; background: #1f1410; border-bottom: 1px solid #3a2219; }
+.strip.reload { min-height: 44px; gap: 14px; background: #122019; border-bottom: 1px solid #1f3a2b; }
 .btn-reload { height: 28px; padding: 0 12px; background: transparent; border: 1px solid var(--ok); color: var(--ok); font-size: 12px; cursor: pointer; }
 .btn-reload:hover { background: var(--ok); color: var(--bg); }
 .play-body { flex: 1; min-height: 0; display: flex; }
-.stage { flex: 1; min-width: 0; container-type: size; display: flex; align-items: center; justify-content: center; position: relative; padding: 20px; background: transparent; }
-.stage.fs { position: fixed; inset: 0; z-index: 100; padding: 0; background: #000; }
-.screen { position: relative; width: min(100cqw, calc(100cqh * 16 / 9)); aspect-ratio: 16 / 9; background: #000; overflow: hidden; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); }
+/* 舞台本身不留 padding（容器查询量的是舞台内容区，铺满时要用到全部面积），16:9 时的四周留白由 --gap 算进宽度 */
+.stage { flex: 1; min-width: 0; container: stage / size; display: flex; align-items: center; justify-content: center; position: relative; --gap: 20px; background: transparent; }
+.stage.fs { position: fixed; inset: 0; z-index: 100; --gap: 0px; background: #000; }
+.screen { position: relative; width: min(100cqw - 2 * var(--gap), (100cqh - 2 * var(--gap)) * 16 / 9); aspect-ratio: 16 / 9; background: #000; overflow: hidden; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); }
 .screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
 .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 13px; letter-spacing: .2em; color: var(--muted2); background: #000; }
 .btn-exitfs { position: absolute; top: 16px; right: 16px; height: 34px; padding: 0 12px; display: flex; align-items: center; gap: 10px; background: var(--bg); border: 1px solid var(--line); color: var(--muted2); font-size: 12px; cursor: pointer; }
@@ -212,6 +218,19 @@ input::placeholder { color: var(--ph); }
 .drawer-list { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .drawer-item { border: 1px solid var(--line); background: var(--panel); padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 .drawer-foot { padding: 14px 16px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.6; color: var(--muted); }
+/* 桌面横屏保持上面的 16:9；舞台是竖的（手机竖屏、窄窗口、开抽屉后变窄）或者是触屏设备（含手机横屏）时，
+   游戏铺满顶栏和提示条以下的全部区域。宽高都给定后 aspect-ratio 自然失效。 */
+@container stage (orientation: portrait) { .screen { width: 100%; height: 100%; box-shadow: none; } }
+@media (pointer: coarse) { .screen { width: 100%; height: 100%; box-shadow: none; } }
+/* 铺满时"退出全屏"浮在游戏上会挡住游戏自己右上角的按钮，改到顶部留出的窄栏里。
+   全屏舞台就是整个视口，这里直接按视口判断，并让屏幕一起铺满，免得近似正方形时两套判断打架。 */
+@media (orientation: portrait), (pointer: coarse) {
+  .stage.fs { padding-top: 40px; }
+  .stage.fs .screen { width: 100%; height: 100%; box-shadow: none; }
+  .btn-exitfs { top: 6px; right: 8px; height: 28px; }
+}
+@media (pointer: coarse) { .play-bar .kbd, .btn-exitfs .kbd { display: none; } }
+@container play-title (width < 260px) { .play-ver { display: none; } }
 
 /* 个人中心 */
 .p-head { display: flex; flex-wrap: wrap; align-items: center; gap: 24px 28px; }
@@ -268,11 +287,20 @@ input::placeholder { color: var(--ph); }
   .statusbar { padding: 0 16px; }
   .statusbar .sb-i:not(:last-child) { display: none; }
   .play-bar { gap: 8px; padding: 0 8px; }
-  .play-bar .kbd { display: none; }
-  .stage { padding: 8px; }
+  .play-bar .kbd, .btn-exitfs .kbd { display: none; }
+  .play-user-name { max-width: 8em; }
+  .strip { padding: 6px 12px; }
+  .stage { --gap: 8px; }
   .drawer { position: absolute; right: 0; top: 0; bottom: 0; z-index: 5; width: min(340px, 90vw); }
   .play-body { position: relative; }
   .auth-panel { padding: 20px; }
   .trow { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 56px; }
   .trow > :nth-child(3), .trow > :nth-child(4) { display: none; }
+}
+/* 手机竖屏：按钮收紧、只留头像，把宽度尽量让给标题 */
+@media (max-width: 480px) {
+  .play-bar { gap: 6px; padding: 0 6px; }
+  .play-bar .btn-bar { padding: 0 8px; }
+  .play-bar .btn-bar.accent { padding: 0 10px; }
+  .play-user-name { display: none; }
 }
