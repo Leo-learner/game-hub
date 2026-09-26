@@ -478,11 +478,10 @@ function playView() {
 <div class="play" data-key="play-${d.slug}">
   <div class="play-bar" data-key="bar">
     <button class="btn-bar" data-act="exitPlay"><span>← 退出</span>${kbd('Esc', 'sm')}</button>
-    <div class="play-title"><div class="serif ell fs18">${d.title}</div><div class="mono fs11 muted nowrap">版本 ${d.rel}</div></div>
-    <div class="flex1"></div>
+    <div class="play-title"><div class="serif ell fs18">${d.title}</div><div class="play-ver mono fs11 muted nowrap">版本 ${d.rel}</div></div>
     <button class="btn-bar ${S.drawer ? 'active' : ''}" data-act="drawer"><span>云存档</span>${when(S.user, () => html`<span class="mono fs11 okc">${d.saves.length}</span>`)}</button>
     <button class="btn-bar" data-act="fs"><span>全屏</span>${kbd('F', 'sm')}</button>
-    ${S.user ? html`<div class="row center gap8 pl4">${avatar()}<div class="fs13">${S.user.displayName}</div></div>`
+    ${S.user ? html`<div class="play-user row center gap8 pl4">${avatar()}<div class="play-user-name fs13 ell">${S.user.displayName}</div></div>`
       : html`<button class="btn-bar accent" data-act="login">登录</button>`}
   </div>
   ${when(!S.user, () => html`<div class="strip guest" data-key="strip-guest"><i class="dot acc"></i><span>游客模式：这一局的进度不会被保存。</span><a class="ulink" href="#" data-act="login">登录后启用云存档</a></div>`)}
