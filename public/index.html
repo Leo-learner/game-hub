@@ -1,8 +1,20 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="data:,">
-<title>Game Hub — 前端预留页</title>
-<h1>Game Hub 后端已就绪</h1>
-<p>这里是前端预留页。你可以直接替换此目录的页面，使用自己选择的框架、布局和交互。</p>
-<ul><li><a href="/docs">交互式接口文档</a></li><li><a href="/openapi.json">OpenAPI 接口定义</a></li><li><a href="/api/v1/games">游戏目录 API</a></li></ul>
-<h2>接入示例</h2><ul id="games"></ul>
-<script>fetch('/api/v1/games').then(r=>r.json()).then(({items})=>{for(const game of items){const li=document.createElement('li');const a=document.createElement('a');a.href=game.launchUrl;a.textContent=game.title;li.append(a);document.getElementById('games').append(li);}}).catch(()=>{});</script></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0e0d0b">
+<title>Leo's Game Hub</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e0d0b'/%3E%3Crect x='4' y='4' width='8' height='8' fill='%23e5482c'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&amp;family=Noto+Sans+SC:wght@400;500;700&amp;family=Noto+Serif+SC:wght@700;900&amp;display=swap">
+<link rel="stylesheet" href="/app.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<div id="app"><div class="boot mono">LOADING<span class="blink">_</span></div></div>
+<noscript><p class="noscript">Leo's Game Hub 需要启用 JavaScript。<a href="/docs">接口文档</a></p></noscript>
+</body>
+</html>

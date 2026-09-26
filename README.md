@@ -4,7 +4,7 @@
 
 项目根目录：`/Users/leo/Desktop/game_site/`。所有源码、完整计划、文档、SDK、示例和本地测试数据都在此目录内。
 
-提供游客直接游玩、用户名密码登录、多个云存档槽、管理员 ZIP 上传、版本发布/回滚/下架。正式前端由你自由设计；根页面只是可替换的预留页。
+提供游客直接游玩、用户名密码登录、多个云存档槽、管理员 ZIP 上传、版本发布/回滚/下架。`public/` 中是正式前端（游戏库、详情、游玩、登录注册、个人中心），也可以整体替换成你自己的前端。
 
 ## 先读这些文件
 
@@ -71,7 +71,15 @@ if (user) {
 
 普通 script 引入：`<script src="/sdk/game-hub.global.js"></script>`，然后使用 `GameHub.createClient()`。类型位于 `public/sdk/index.d.ts` 和 `sdk/generated.ts`。也可完全不使用 SDK，直接调用 fetch。
 
-本地页面可替换 `public/index.html`。服务器前端目录为 `/opt/apps/game-hub/frontend/`。框架构建产物放入该目录即可；SPA 路由需设置 `SPA_FALLBACK=true`。API、SDK、文档、健康检查、`/mcp` 和游戏资源路径为保留路径。
+正式前端由 `public/index.html`、`public/app.js`、`public/app.css` 组成：原生 JS，通过 `/sdk/game-hub.js` 调用接口，使用 hash 路由（`#/games/<slug>`、`#/play/<slug>`、`#/me`），不需要 `SPA_FALLBACK`，也没有构建步骤。本地运行 `npm run build` 生成 SDK 后，打开 http://localhost:3220 即可。
+
+服务器前端目录为 `/opt/apps/game-hub/frontend/`，应用升级不会覆盖其中已有的页面。更新前端时需手动复制这三个文件：
+
+```bash
+sudo install -m 644 public/index.html public/app.js public/app.css /opt/apps/game-hub/frontend/
+```
+
+也可以换成自己的页面。框架构建产物放入该目录即可；SPA 路由需设置 `SPA_FALLBACK=true`。API、SDK、文档、健康检查、`/mcp` 和游戏资源路径为保留路径。
 
 ## 游戏包约定
 
