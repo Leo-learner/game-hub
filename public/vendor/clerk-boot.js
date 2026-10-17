@@ -3,8 +3,11 @@
 //
 // Loads clerk-js from our Frontend API at a pinned version, keeps this site's
 // __session cookie fresh, and sends signed-out visitors to the account portal.
-// It never mounts Clerk UI, so pages only need these CSP additions:
-//   script-src https://clerk.dkz12345.com; connect-src https://clerk.dkz12345.com
+// It never mounts Clerk UI, so pages with a strict CSP only need these additions
+// (clerk-js loads Clerk Protect itself):
+//   script-src https://clerk.dkz12345.com https://*.protect.clerk.com
+//   connect-src https://clerk.dkz12345.com https://*.protect.clerk.com:*
+//   frame-src https://*.protect.clerk.com; worker-src 'self' blob:
 const FRONTEND_API = 'https://clerk.dkz12345.com';
 const CLERK_JS_VERSION = '6.37.0';
 const PUBLISHABLE_KEY = 'pk_live_Y2xlcmsuZGt6MTIzNDUuY29tJA';
@@ -30,7 +33,8 @@ export function loadClerk(timeoutMs = 10000) {
 
 function startLoading() {
   if (!clerkPromise) {
-    clerkPromise = new Promise((resolve, reject) => {
+    // Reuse a Clerk instance already on the page (also how tests provide a fake).
+    clerkPromise = window.Clerk?.load ? Promise.resolve(window.Clerk) : new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = `${FRONTEND_API}/npm/@clerk/clerk-js@${CLERK_JS_VERSION}/dist/clerk.browser.js`;
       script.async = true;
