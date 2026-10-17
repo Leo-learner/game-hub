@@ -282,6 +282,11 @@ test('OpenAPI documents generated interfaces and private responses without SPA f
     assert.equal((await f.call('GET','/api/v1/missing',undefined,undefined,{accept:'text/html'})).statusCode,404);
     assert.equal((await f.call('GET','/sdk/missing.js',undefined,undefined,{accept:'text/html'})).statusCode,404);
     assert.equal((await f.call('GET','/readyz')).json().status,'ready');
+    // Clerk's sign-out hop can percent-encode the hash route into the path.
+    for(const [from,to] of [['/%23/','/#/'],['/%23/me/settings','/#/me/settings'],['/%23','/#'],['/%23/games/%E4%B8%AD','/#/games/%E4%B8%AD']]){
+      const r=await f.call('GET',from);assert.equal(r.statusCode,302,from);assert.equal(r.headers.location,to,from);
+    }
+    assert.equal((await f.call('GET','/%2523/')).statusCode,404);
   }finally{await f.close();}
 });
 

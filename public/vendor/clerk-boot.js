@@ -70,10 +70,16 @@ export async function getToken() {
   return clerk.session ? clerk.session.getToken() : null;
 }
 
-/** Signs out of every dkz12345.com site at once. */
+/**
+ * Signs out of every dkz12345.com site at once. The #fragment is dropped: when
+ * the client cookie is close to expiry, clerk-js goes through
+ * clerk.dkz12345.com/v1/client/touch, whose redirect turns "/#/" into "/%23/".
+ */
 export async function signOut(redirectUrl = HOME_URL) {
   const clerk = await loadClerk();
-  await clerk.signOut({ redirectUrl });
+  const target = new URL(redirectUrl, location.href);
+  target.hash = '';
+  await clerk.signOut({ redirectUrl: target.href });
 }
 
 export function accountPageUrl() {
