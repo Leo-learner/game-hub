@@ -1,6 +1,8 @@
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
+/** Shared Clerk login (clerk.dkz12345.com). Only public values: no secret key. */
+export interface ClerkConfig { publishableKey: string; jwtKey: string; ownerUserId: string | null }
 export interface Config {
   host: string; port: number; publicOrigin: string; allowedOrigins: string[];
   dataDir: string; publicDir: string; sdkDir: string; cookieSecure: boolean; cookieName: string;
@@ -8,6 +10,16 @@ export interface Config {
   uploadMaxBytes: number; extractMaxBytes: number; uploadMaxFiles: number;
   allowRegistration: boolean; apiDocs: boolean; spaFallback: boolean; xAccelRedirect: boolean;
   logger: boolean; logLevel: string; now: () => number;
+  clerk: ClerkConfig | null;
+}
+function clerkFromEnv(env: NodeJS.ProcessEnv): ClerkConfig | null {
+  const publishableKey = env.CLERK_PUBLISHABLE_KEY;
+  const jwtKey = env.CLERK_JWT_KEY_FILE ? readFileSync(env.CLERK_JWT_KEY_FILE, 'utf8') : env.CLERK_JWT_KEY?.replace(/\\n/g, '\n');
+  if (!publishableKey && !jwtKey) return null;
+  if (!publishableKey || !jwtKey) throw new Error('CLERK_PUBLISHABLE_KEY and CLERK_JWT_KEY(_FILE) must be set together');
+  const ownerUserId = env.OWNER_CLERK_USER_ID || null;
+  if (ownerUserId && !ownerUserId.startsWith('user_')) throw new Error('Invalid OWNER_CLERK_USER_ID');
+  return { publishableKey, jwtKey, ownerUserId };
 }
 export function loadEnv(): void {
   const file = path.resolve('.env');
@@ -36,7 +48,7 @@ export function createConfig(overrides: Partial<Config> = {}, env = process.env)
     uploadMaxBytes: num('UPLOAD_MAX_BYTES', 52428800), extractMaxBytes: num('EXTRACT_MAX_BYTES', 209715200),
     uploadMaxFiles: num('UPLOAD_MAX_FILES', 10000), allowRegistration: bool('ALLOW_REGISTRATION', true),
     apiDocs: bool('API_DOCS', true), spaFallback: bool('SPA_FALLBACK', false), xAccelRedirect: bool('X_ACCEL_REDIRECT', false),
-    logger: true, logLevel: env.LOG_LEVEL ?? 'info', now: Date.now, ...overrides,
+    logger: true, logLevel: env.LOG_LEVEL ?? 'info', now: Date.now, clerk: clerkFromEnv(env), ...overrides,
   };
   config.publicOrigin = new URL(config.publicOrigin).origin;
   config.allowedOrigins = [...new Set([config.publicOrigin, ...config.allowedOrigins.map(x => new URL(x).origin)])];
@@ -44,5 +56,6 @@ export function createConfig(overrides: Partial<Config> = {}, env = process.env)
   if (process.env.NODE_ENV === 'production' && (!config.cookieSecure || !config.publicOrigin.startsWith('https://'))) {
     throw new Error('Production requires HTTPS and COOKIE_SECURE=true');
   }
+  if (process.env.NODE_ENV === 'production' && !config.clerk) throw new Error('Production requires CLERK_PUBLISHABLE_KEY and CLERK_JWT_KEY_FILE');
   return config;
 }

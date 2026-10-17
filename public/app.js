@@ -1,7 +1,10 @@
 // Leo's Game Hub 正式前端：原生 JS + /sdk/game-hub.js，hash 路由（无需 SPA_FALLBACK）。
 import { createClient, ApiError } from '/sdk/game-hub.js';
+import { loadClerk, requireSignIn, signOut, accountPageUrl } from '/vendor/clerk-boot.js';
 
 const client = createClient();
+// 登录用 dkz12345.com 统一的 Clerk 账号；本页保持 __session 令牌新鲜，同源 iframe 里的游戏遇到 401 时借这个钩子刷新一次。
+window.__gameHubRefreshAuth = async () => { const clerk = await loadClerk(); await clerk.session?.getToken({ skipCache: true }); };
 const root = document.getElementById('app');
 
 // ── 工具 ────────────────────────────────────────────────────────────────
@@ -39,12 +42,12 @@ const hash = s => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 // ── 状态 ────────────────────────────────────────────────────────────────
 const S = {
   booted: false, games: [], gamesErr: null, gamesLoading: true,
-  user: null, saves: [], savesLoading: false,
+  user: null, account: null, saves: [], savesLoading: false,
   route: { name: 'home' }, sel: null, q: '', tag: '全部',
-  auth: { open: false, mode: 'login', after: null, user: '', name: '', pw: '', err: {}, busy: false },
+  link: { open: false, mode: 'new', after: null, user: '', name: '', pw: '', err: {}, busy: false },
   fullscreen: false, drawer: false, needsReload: false, frameLoading: true, frameKey: 0, refreshing: false,
   modal: null, toast: null,
-  set: { name: '', old: '', nw: '', nw2: '', err: {}, busy: '' },
+  set: { name: '', err: {}, busy: '' },
   vw: window.innerWidth,
 };
 
@@ -125,7 +128,7 @@ function onRoute() {
   const prev = S.route, r = parseHash();
   if (r.name === 'profile' && !S.user) {
     history.replaceState(null, '', '#/');
-    S.route = { name: 'home' }; openAuth('login', r); render(); return;
+    S.route = { name: 'home' }; signIn(r); render(); return;
   }
   if (prev.name !== r.name || prev.slug !== r.slug) {
     S.drawer = false; S.needsReload = false;
@@ -133,7 +136,7 @@ function onRoute() {
     if (r.name !== 'profile' || prev.name !== 'profile') window.scrollTo(0, 0);
   }
   if (r.slug) S.sel = r.slug;
-  if (r.name === 'profile' && (prev.name !== 'profile' || prev.tab !== r.tab) && r.tab === 'settings') S.set = { name: S.user.displayName, old: '', nw: '', nw2: '', err: {}, busy: '' };
+  if (r.name === 'profile' && (prev.name !== 'profile' || prev.tab !== r.tab) && r.tab === 'settings') S.set = { name: S.user.displayName, err: {}, busy: '' };
   S.route = r;
   syncBrowserFullscreen();
   render();
@@ -143,48 +146,56 @@ window.addEventListener('hashchange', onRoute);
 // ── 动作 ────────────────────────────────────────────────────────────────
 let toastTimer;
 function toast(msg) { clearTimeout(toastTimer); S.toast = msg; render(); toastTimer = setTimeout(() => { S.toast = null; render(); }, 2600); }
-function openAuth(mode, after) { Object.assign(S.auth, { open: true, mode: mode || 'login', after: after || null, err: {}, pw: '', busy: false }); render(); setTimeout(() => root.querySelector('#a-user')?.focus(), 0); }
-function closeAuth() { S.auth.open = false; render(); }
+// 登录：没登录 Clerk 就去统一账号页；登录了但本站还没有玩家档案，就选「新玩家」或「认领旧账号」。
+async function signIn(after) {
+  if (S.account?.state === 'link-required') return openLink(after);
+  if (S.account?.state === 'disabled') return toast('这个玩家档案已被停用，请联系 Leo');
+  const back = location.origin + location.pathname + (after ? href(after) : location.hash || '#/');
+  try { await requireSignIn(back); } catch { toast('登录服务暂时连不上，请稍后重试'); }
+}
+async function refreshAccount() {
+  try { const r = await client.auth.account(); S.user = r.user; S.account = r.account ?? null; }
+  catch { S.user = null; S.account = null; }
+}
+function openLink(after) {
+  Object.assign(S.link, { open: true, mode: 'new', after: after || null, name: S.account?.suggestedName ?? '', user: '', pw: '', err: {}, busy: false });
+  render(); setTimeout(() => root.querySelector('#l-first')?.focus(), 0);
+}
+function closeLink() { S.link.open = false; render(); }
 
-async function submitAuth() {
-  const a = S.auth, err = {}, u = a.user.trim(), reg = a.mode === 'register';
-  if (reg) {
-    if (!/^[A-Za-z0-9_]{3,20}$/.test(u)) err.user = '用户名需为 3–20 位字母、数字或下划线';
-    if ([...a.name.trim()].length > 24) err.name = '昵称最多 24 个字符';
-    if (a.pw.length < 8 || a.pw.length > 128) err.pw = '密码需为 8–128 个字符';
-  } else {
-    if (!u) err.user = '请输入用户名';
-    if (!a.pw) err.pw = '请输入密码';
+async function submitLink() {
+  const l = S.link, err = {}, isNew = l.mode === 'new';
+  if (isNew) { if ([...l.name.trim()].length > 24) err.name = '昵称最多 24 个字符'; }
+  else {
+    if (!l.user.trim()) err.user = '请输入旧用户名';
+    if (!l.pw) err.pw = '请输入旧密码';
   }
-  a.err = err;
+  l.err = err;
   if (Object.keys(err).length) return render();
-  a.busy = true; render();
+  l.busy = true; render();
   try {
-    const name = a.name.trim();
-    const user = reg ? await client.auth.register({ username: u, password: a.pw, ...(name ? { displayName: name } : {}) })
-      : await client.auth.login({ username: u, password: a.pw });
-    finishAuth(user, reg ? '注册成功，已自动登录' : '欢迎回来，' + user.displayName);
+    const name = l.name.trim();
+    const user = isNew ? await client.auth.linkNew(name || undefined) : await client.auth.claim(l.user.trim(), l.pw);
+    S.account = null;
+    finishLink(user, isNew ? '欢迎，' + user.displayName : '已认领旧档案，原来的存档都在');
   } catch (e) {
-    a.busy = false;
-    if (e instanceof ApiError && e.code === 'USERNAME_TAKEN') a.err = { user: e.message };
-    else a.err = { form: errMsg(e) };
+    l.busy = false; l.err = { form: errMsg(e) };
+    if (e instanceof ApiError && e.code === 'ALREADY_LINKED') { await refreshAccount(); if (S.user) return finishLink(S.user, '玩家档案已就绪'); }
     render();
   }
 }
-function finishAuth(user, msg) {
-  const after = S.auth.after;
-  Object.assign(S.auth, { open: false, busy: false, pw: '', name: '' });
+function finishLink(user, msg) {
+  const after = S.link.after;
+  Object.assign(S.link, { open: false, busy: false, pw: '', name: '' });
   S.user = user; S.needsReload = S.route.name === 'play';
   loadSaves();
   toast(msg);
   if (after) go(after);
 }
-async function logout(all) {
-  try { await (all ? client.auth.logoutAll() : client.auth.logout()); }
-  catch (e) { S.modal = null; return toast(errMsg(e)); }
-  S.user = null; S.saves = []; S.modal = null; S.needsReload = false;
-  toast(all ? '所有设备都已退出登录' : '已退出登录');
-  if (S.route.name === 'profile') go({ name: 'home' });
+async function logout() {
+  S.modal = null; S.saves = []; S.needsReload = false; client.auth.forget(); render();
+  try { await signOut(location.origin + location.pathname + '#/'); }
+  catch { await refreshAccount(); render(); toast('退出失败，请稍后重试'); }
 }
 function askDelete(slug, slot) {
   const x = S.saves.find(y => y.slug === slug && y.slot === slot); if (!x) return;
@@ -217,22 +228,6 @@ async function saveName() {
   catch (e) { S.set.err = { name: errMsg(e) }; }
   S.set.busy = ''; render();
 }
-async function changePw() {
-  const s = S.set, err = {};
-  if (!s.old) err.old = '请输入原密码';
-  if (s.nw.length < 8 || s.nw.length > 128) err.nw = '新密码需为 8–128 个字符';
-  else if (s.nw !== s.nw2) err.nw2 = '两次输入的新密码不一致';
-  s.err = err;
-  if (Object.keys(err).length) return render();
-  s.busy = 'pw'; render();
-  try { await client.auth.changePassword(s.old, s.nw); Object.assign(s, { old: '', nw: '', nw2: '', err: {} }); toast('密码已修改，其他设备已退出登录'); }
-  catch (e) {
-    s.err = e instanceof ApiError && e.code === 'INVALID_CREDENTIALS' ? { old: e.message } : { nw: errMsg(e) };
-    // 会话已失效时 SDK 已通过 onAuthChange 清空登录状态并返回首页，这里只补一条提示。
-    if (e instanceof ApiError && e.code === 'AUTH_REQUIRED') toast('登录已失效，请重新登录');
-  }
-  s.busy = ''; render();
-}
 function play(slug, fs) { go({ name: 'play', slug }, { fs }); }
 function toggleFs() { S.fullscreen = !S.fullscreen; syncBrowserFullscreen(); render(); }
 function syncBrowserFullscreen() {
@@ -245,8 +240,8 @@ function reloadGame() { S.needsReload = false; S.frameLoading = true; S.frameKey
 async function refreshSaves() { S.refreshing = true; render(); await loadSaves(); S.refreshing = false; toast('云存档已刷新'); }
 
 const actions = {
-  login: () => openAuth('login'),
-  goSaves: () => (S.user ? go({ name: 'profile', tab: 'saves' }) : openAuth('login', { name: 'profile', tab: 'saves' })),
+  login: () => signIn(),
+  goSaves: () => (S.user ? go({ name: 'profile', tab: 'saves' }) : signIn({ name: 'profile', tab: 'saves' })),
   play: slug => play(slug),
   playFs: slug => { document.documentElement.requestFullscreen?.().catch(() => {}); play(slug, true); },
   exitPlay: () => go({ name: 'detail', slug: S.route.slug }),
@@ -255,19 +250,18 @@ const actions = {
   tag: t => { S.tag = t; render(); },
   clear: () => { S.q = ''; S.tag = '全部'; render(); },
   retryGames: loadGames,
-  closeAuth, authMode: m => { S.auth.mode = m; S.auth.err = {}; render(); },
-  logout: () => logout(false),
-  logoutAll: () => { S.modal = { title: '退出所有设备？', body: '包括这台设备在内，所有登录都会失效，之后需要重新登录。云存档不受影响。', confirm: '全部退出', danger: true, run: () => logout(true) }; render(); },
+  closeLink, linkMode: m => { S.link.mode = m; S.link.err = {}; render(); setTimeout(() => root.querySelector('#l-first')?.focus(), 0); },
+  logout: () => { S.modal = { title: '退出登录？', body: '这是 dkz12345.com 的统一账号，退出后其他网站也会一起退出。云存档不受影响。', confirm: '退出登录', danger: false, run: logout }; render(); },
   del: arg => { const i = arg.indexOf('/'); askDelete(arg.slice(0, i), arg.slice(i + 1)); },
   mConfirm: async () => { const m = S.modal; if (!m || m.busy) return; m.busy = true; render(); await m.run(); if (S.modal === m) { m.busy = false; render(); } },
   mCancel: () => { S.modal = null; render(); },
-  saveName, changePw,
+  saveName,
   stop: () => {},
 };
 const inputs = {
   q: v => { S.q = v; },
-  'a.user': v => { S.auth.user = v; }, 'a.name': v => { S.auth.name = v; }, 'a.pw': v => { S.auth.pw = v; },
-  's.name': v => { S.set.name = v; }, 's.old': v => { S.set.old = v; }, 's.nw': v => { S.set.nw = v; }, 's.nw2': v => { S.set.nw2 = v; },
+  'l.user': v => { S.link.user = v; }, 'l.name': v => { S.link.name = v; }, 'l.pw': v => { S.link.pw = v; },
+  's.name': v => { S.set.name = v; },
 };
 
 root.addEventListener('click', e => {
@@ -277,7 +271,7 @@ root.addEventListener('click', e => {
   actions[el.dataset.act]?.(el.dataset.arg);
 });
 root.addEventListener('input', e => { const f = e.target.dataset?.input; if (f && inputs[f]) { inputs[f](e.target.value); render(); } });
-root.addEventListener('submit', e => { e.preventDefault(); if (e.target.dataset.submit === 'auth' && !S.auth.busy) submitAuth(); });
+root.addEventListener('submit', e => { e.preventDefault(); if (e.target.dataset.submit === 'link' && !S.link.busy) submitLink(); });
 root.addEventListener('mouseover', e => {
   const el = e.target.closest('[data-hover-sel]');
   if (el && S.sel !== el.dataset.hoverSel) { S.sel = el.dataset.hoverSel; render(); }
@@ -316,14 +310,14 @@ window.addEventListener('keydown', e => {
   const t = e.target, tag = t && t.tagName, typing = tag === 'INPUT' || tag === 'TEXTAREA', r = S.route;
   if (e.key === 'Escape') {
     if (S.modal) { S.modal = null; return render(); }
-    if (S.auth.open) return closeAuth();
+    if (S.link.open) return closeLink();
     if (S.fullscreen) return toggleFs();
     if (typing) return t.blur();
     if (r.name === 'play') return go({ name: 'detail', slug: r.slug });
     if (r.name === 'detail' || r.name === 'profile') return go({ name: 'home' });
     return;
   }
-  if (typing || tag === 'BUTTON' || S.auth.open || S.modal) return;
+  if (typing || tag === 'BUTTON' || S.link.open || S.modal) return;
   if (r.name === 'home') {
     if (e.key === '/') { e.preventDefault(); root.querySelector('#q')?.focus(); return; }
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) { e.preventDefault(); return move(e.key); }
@@ -355,7 +349,7 @@ function header() {
   <div class="flex1"></div>
   ${S.user
     ? html`<a class="hdr-user" href="#/me">${avatar()}<span>${S.user.displayName}</span><i class="dot ok"></i></a>`
-    : html`<div class="hdr-guest"><span class="mono">游客</span><button class="btn btn-line" data-act="login">登录 / 注册</button></div>`}
+    : html`<div class="hdr-guest"><span class="mono">游客</span><button class="btn btn-line" data-act="login">${S.account?.state === 'link-required' ? '完成玩家设置' : '登录 / 注册'}</button></div>`}
 </header>`;
 }
 
@@ -529,7 +523,6 @@ function profileView() {
   });
   const cols = html`<div>存档位</div><div>更新时间</div><div>修订</div><div>大小</div><div></div>`;
   const s = S.set, nameDirty = s.name.trim() !== u.displayName;
-  const field = (label, key, val, err, ac) => html`<label class="col gap6"><span class="fs13 muted2">${label}</span><input class="inp" type="password" data-input="${key}" value="${val}" autocomplete="${ac}">${when(err, () => html`<span class="err">${err}</span>`)}</label>`;
   return html`
 <main class="page profile" data-key="profile">
   <section class="p-head">
@@ -575,66 +568,56 @@ function profileView() {
       </div>
     </section>
     <section class="set-row">
-      <div class="set-l"><div class="fs16 b">用户名</div><div class="fs13 lh16 muted2">用于登录，注册后不可修改。</div></div>
+      <div class="set-l"><div class="fs16 b">玩家编号</div><div class="fs13 lh16 muted2">认领的旧档案沿用原来的用户名。</div></div>
       <div class="set-r mono fs15 h44 row center">${u.username}</div>
     </section>
-    <section class="set-row">
-      <div class="set-l"><div class="fs16 b">修改密码</div><div class="fs13 lh16 muted2">修改成功后，其他设备上的登录会失效。</div></div>
-      <div class="set-r col gap14">
-        ${field('原密码', 's.old', s.old, s.err.old, 'current-password')}
-        ${field('新密码 · 8–128 个字符', 's.nw', s.nw, s.err.nw, 'new-password')}
-        ${field('确认新密码', 's.nw2', s.nw2, s.err.nw2, 'new-password')}
-        <button class="btn btn-light h44 fs14 self-start" data-act="changePw">${s.busy === 'pw' ? '提交中…' : '修改密码'}</button>
-      </div>
-    </section>
     <section class="set-row last">
-      <div class="set-l"><div class="fs16 b">登录设备</div><div class="fs13 lh16 muted2">在公共电脑上登录过？可以让所有设备的登录一起失效。</div></div>
-      <div class="set-r"><button class="btn btn-danger h44 fs14" data-act="logoutAll">退出所有设备</button></div>
+      <div class="set-l"><div class="fs16 b">账号与安全</div><div class="fs13 lh16 muted2">登录方式、密码、两步验证和已登录设备，都在 dkz12345.com 的统一账号页管理，对所有网站生效。</div></div>
+      <div class="set-r"><a class="btn btn-light h44 fs14" href="${accountPageUrl()}" rel="noopener">管理统一账号</a></div>
     </section>
   </div>`}
 </main>`;
 }
 
-function authView() {
-  const a = S.auth, isLogin = a.mode === 'login', err = a.err;
+function linkView() {
+  const l = S.link, isNew = l.mode === 'new', err = l.err;
   return html`
-<div class="auth" data-key="auth" role="dialog" aria-modal="true" aria-label="${isLogin ? '登录' : '注册'}">
+<div class="auth" data-key="auth" role="dialog" aria-modal="true" aria-label="设置玩家档案">
   ${when(S.vw >= 960, () => html`
   <div class="auth-art">
     <div class="auth-p1 mono">P1</div>
     <div class="brand rel"><i class="sq"></i><span class="mono">LEO'S GAME HUB</span></div>
     <div class="rel col gap20 mw560">
-      <div class="eyebrow mono">${isLogin ? 'PLAYER LOGIN' : 'NEW PLAYER'}</div>
-      <h1 class="h-auth serif">${isLogin ? '读取玩家档案' : '登记新玩家'}</h1>
-      <p class="auth-lede">${isLogin ? '登录后，你在每款游戏里的进度都会保存到云端。换一台设备，从上次停下的地方继续。' : '注册后自动登录。每款游戏都有多个云存档位，只需要用户名和密码。'}</p>
+      <div class="eyebrow mono">${isNew ? 'NEW PLAYER' : 'CLAIM PROFILE'}</div>
+      <h1 class="h-auth serif">${isNew ? '登记新玩家' : '认领旧档案'}</h1>
+      <p class="auth-lede">${isNew ? '你已经用 dkz12345 统一账号登录。在这里建一份玩家档案，之后每款游戏的进度都会存到云端。' : '以前在本站注册过？输入当时的用户名和密码，原来的云存档会接到现在的统一账号上。只需要做一次。'}</p>
     </div>
     <div class="rel mono fs11 muted ls06">游客也能直接游玩，只是进度不会保存。</div>
   </div>`)}
   <div class="auth-panel">
-    <div class="row end"><button class="btn-bar dim" data-act="closeAuth"><span>以游客身份继续</span>${kbd('Esc', 'sm')}</button></div>
-    <form class="auth-form" data-submit="auth" novalidate>
+    <div class="row end"><button class="btn-bar dim" data-act="closeLink"><span>先以游客身份继续</span>${kbd('Esc', 'sm')}</button></div>
+    <form class="auth-form" data-submit="link" novalidate>
       <div class="auth-tabs">
-        <button type="button" class="tab ${isLogin ? 'on' : ''}" data-act="authMode" data-arg="login">登录</button>
-        <button type="button" class="tab ${isLogin ? '' : 'on'}" data-act="authMode" data-arg="register">注册</button>
+        <button type="button" class="tab ${isNew ? 'on' : ''}" data-act="linkMode" data-arg="new">新玩家</button>
+        <button type="button" class="tab ${isNew ? '' : 'on'}" data-act="linkMode" data-arg="claim">认领旧账号</button>
       </div>
-      <label class="col gap8">
-        <div class="lbl"><span>用户名</span>${when(!isLogin, () => html`<span class="mono fs11 muted">3–20 位字母 / 数字 / 下划线</span>`)}</div>
-        <input id="a-user" class="inp big mono ${err.user ? 'bad' : ''}" data-input="a.user" value="${a.user}" autocomplete="username" maxlength="20" autocapitalize="off" spellcheck="false">
+      ${isNew ? html`<label class="col gap8">
+        <div class="lbl"><span>昵称（可选）</span><span class="mono fs11 muted">1–24 个字符，可用中文</span></div>
+        <input id="l-first" class="inp big ${err.name ? 'bad' : ''}" data-input="l.name" value="${l.name}" maxlength="24">
+        ${when(err.name, () => html`<div class="err">${err.name}</div>`)}
+      </label>` : html`<label class="col gap8">
+        <div class="lbl"><span>旧用户名</span></div>
+        <input id="l-first" class="inp big mono ${err.user ? 'bad' : ''}" data-input="l.user" value="${l.user}" autocomplete="username" maxlength="20" autocapitalize="off" spellcheck="false">
         ${when(err.user, () => html`<div class="err">${err.user}</div>`)}
       </label>
-      ${when(!isLogin, () => html`<label class="col gap8">
-        <div class="lbl"><span>昵称（可选）</span><span class="mono fs11 muted">1–24 个字符，可用中文</span></div>
-        <input class="inp big ${err.name ? 'bad' : ''}" data-input="a.name" value="${a.name}" maxlength="24">
-        ${when(err.name, () => html`<div class="err">${err.name}</div>`)}
-      </label>`)}
       <label class="col gap8">
-        <div class="lbl"><span>密码</span>${when(!isLogin, () => html`<span class="mono fs11 muted">8–128 个字符</span>`)}</div>
-        <input id="a-pw" class="inp big ${err.pw ? 'bad' : ''}" type="password" data-input="a.pw" value="${a.pw}" autocomplete="${isLogin ? 'current-password' : 'new-password'}">
+        <div class="lbl"><span>旧密码</span></div>
+        <input class="inp big ${err.pw ? 'bad' : ''}" type="password" data-input="l.pw" value="${l.pw}" autocomplete="current-password">
         ${when(err.pw, () => html`<div class="err">${err.pw}</div>`)}
-      </label>
+      </label>`}
       ${when(err.form, () => html`<div class="form-err"><i class="dot acc"></i><span>${err.form}</span></div>`)}
-      <button type="submit" class="btn btn-play submit">${a.busy ? '验证中…' : isLogin ? '登录' : '注册并登录'}</button>
-      ${when(isLogin, () => html`<div class="col gap10 fs12 lh16 muted"><div>忘记密码？本站没有邮箱找回，请联系 Leo 重置。</div></div>`)}
+      <button type="submit" class="btn btn-play submit">${l.busy ? '处理中…' : isNew ? '创建玩家档案' : '认领并继续'}</button>
+      ${when(!isNew, () => html`<div class="col gap10 fs12 lh16 muted"><div>忘记旧密码？请联系 Leo 重置后再认领。</div></div>`)}
     </form>
   </div>
 </div>`;
@@ -659,7 +642,7 @@ function view() {
   return html`<div class="app">
   ${when(r.name !== 'play', header)}
   ${r.name === 'home' ? homeView() : r.name === 'detail' ? detailView() : r.name === 'play' ? playView() : r.name === 'profile' && S.user ? profileView() : ''}
-  ${when(S.auth.open, authView)}
+  ${when(S.link.open, linkView)}
   ${when(S.modal, modalView)}
   ${when(S.toast, () => html`<div class="toast" data-key="toast" role="status"><i class="dot acc"></i><span>${S.toast}</span></div>`)}
 </div>`;
@@ -722,14 +705,25 @@ function render() {
     t.innerHTML = view().s;
     morphChildren(root, t.content);
     document.title = titleFor();
-    document.body.classList.toggle('lock', S.auth.open || !!S.modal || S.route.name === 'play');
+    document.body.classList.toggle('lock', S.link.open || !!S.modal || S.route.name === 'play');
   });
 }
 
 // ── 启动 ────────────────────────────────────────────────────────────────
 (async () => {
-  try { S.user = await client.auth.me(); } catch { S.user = null; }
+  // Clerk 先加载完（会刷新本站的 __session），再读玩家档案；连不上 Clerk 时按游客浏览。
+  const clerk = await loadClerk().catch(() => null);
+  await refreshAccount();
   S.booted = true;
   onRoute();
+  if (S.account?.state === 'link-required') openLink();
   await Promise.all([loadGames(), loadSaves()]);
+  // 在别的标签页或别的网站登录、退出时，同步这里的状态。
+  let seen = clerk?.user?.id ?? null;
+  clerk?.addListener(({ user }) => {
+    const now = user?.id ?? null;
+    if (now === seen) return;
+    seen = now;
+    refreshAccount().then(() => { if (!S.user) S.saves = []; else loadSaves(); render(); });
+  });
 })();

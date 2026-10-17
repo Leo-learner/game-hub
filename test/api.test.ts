@@ -9,26 +9,33 @@ import { createConfig } from '../src/config.js';
 import { openDb,migrate } from '../src/db/index.js';
 import { buildApp } from '../src/app.js';
 import { backup,restore,verifyBackup } from '../src/modules/backups.js';
+import { createTestSigner,TEST_PUBLISHABLE_KEY } from '../src/lib/clerk-gate/test-signer.js';
 
 const password='test-password-29!';
+// Clerk-shaped session tokens signed with a throwaway key: no network, no real instance.
+const signer=createTestSigner();
+const OWNER='user_owner';
 async function fixture(overrides:Parameters<typeof createConfig>[0]={}) {
   await mkdir('.work/tests',{recursive:true});
   const dir=await mkdtemp(path.resolve('.work/tests/case-'));let now=Date.now();
-  const config=createConfig({dataDir:dir,logger:false,now:()=>now,...overrides},{});
+  const config=createConfig({dataDir:dir,logger:false,now:()=>now,clerk:{publishableKey:TEST_PUBLISHABLE_KEY,jwtKey:signer.jwtKey,ownerUserId:OWNER},...overrides},{});
   const db=openDb(dir);migrate(db);migrate(db);db.close();
   let app=await buildApp(config);
   const call=(method:'GET'|'POST'|'PUT'|'PATCH'|'DELETE',url:string,body?:unknown,cookie?:string,headers:Record<string,string>={})=>app.inject({
     method,url,headers:{'x-gamehub-request':'1',...(cookie?{cookie}:{}),...headers},...(body===undefined?{}:{payload:body as object}),
   });
+  /** A __session cookie for Clerk user `sub`, minted for this site unless claims say otherwise. */
+  const session=(sub:string,claims:Record<string,unknown>={})=>'__session='+signer.token({sub,azp:config.publicOrigin,email:sub.replace(/^user_/,'')+'@example.com',...claims});
   async function user(username='player_a') {
-    const result=await call('POST','/api/v1/auth/register',{username,password});
+    const cookie=session('user_'+username);
+    const result=await call('POST','/api/v1/auth/link/new',{},cookie);
     assert.equal(result.statusCode,201,result.body);
-    return {cookie:cookieOf(result.headers['set-cookie']),user:result.json().user};
+    return {cookie,user:result.json().user};
   }
   async function admin() {
-    await app.services.auth.create('owner',password,'Owner','admin');
-    const result=await call('POST','/api/v1/auth/login',{username:'owner',password});
-    assert.equal(result.statusCode,200,result.body);return cookieOf(result.headers['set-cookie']);
+    const cookie=session(OWNER);
+    const result=await call('POST','/api/v1/auth/link/new',{},cookie);
+    assert.equal(result.statusCode,201,result.body);assert.equal(result.json().user.role,'admin');return cookie;
   }
   async function game(slug='clicker',manifest?:Record<string,unknown>) {
     app.services.games.create({slug,title:'示例 '+slug});
@@ -37,12 +44,11 @@ async function fixture(overrides:Parameters<typeof createConfig>[0]={}) {
     const release=await app.services.releases.importZip(slug,Readable.from(await zip(files)));
     const result=app.services.games.publish(slug,release.id);return {release,game:result};
   }
-  return {get app(){return app;},config,dir,call,user,admin,game,
+  return {get app(){return app;},config,dir,call,session,user,admin,game,
     advance(ms:number){now+=ms;},
     async restart(){await app.close();app=await buildApp(config);},
     async close(){await app.close();await rm(dir,{recursive:true,force:true});}};
 }
-function cookieOf(value:string|string[]|undefined){assert.ok(value);return (Array.isArray(value)?value.at(-1)!:value).split(';')[0];}
 async function zip(files:Record<string,string>,special?:(z:yazl.ZipFile)=>void) {
   const z=new yazl.ZipFile();for(const [name,data]of Object.entries(files))z.addBuffer(Buffer.from(data),name,{compress:false});
   special?.(z);z.end();const chunks:Buffer[]=[];for await(const chunk of z.outputStream as Readable)chunks.push(Buffer.from(chunk));return Buffer.concat(chunks);
@@ -56,65 +62,107 @@ function multipartBody(bytes:Buffer,extra=false){
 }
 const save=(expectedRevision=0,data:Record<string,unknown>={score:7})=>({data,schemaVersion:1,expectedRevision});
 
-test('authentication, strict schemas, profile, role boundary and session revocation',async()=>{
+test('Clerk sign-in: link-required state, new players, strict schemas, profile and role boundary',async()=>{
   const f=await fixture();try{
     assert.deepEqual((await f.call('GET','/api/v1/auth/me')).json(),{user:null});
-    const a=await f.user();
-    assert.equal(a.user.role,'player');
-    assert.equal((await f.call('POST','/api/v1/auth/register',{username:'PLAYER_A',password})).statusCode,409);
-    assert.equal((await f.call('POST','/api/v1/auth/register',{username:'attacker',password,role:'admin'})).statusCode,400);
-    assert.equal((await f.call('POST','/api/v1/auth/login',{username:'player_a',password:'wrong'})).statusCode,401);
-    assert.equal((await f.call('GET','/api/v1/admin/games',undefined,a.cookie)).statusCode,403);
-    const profile=await f.call('PATCH','/api/v1/auth/me',{displayName:'中文昵称'},a.cookie);
-    assert.equal(profile.json().user.displayName,'中文昵称');assert.ok(!('passwordHash' in profile.json().user));
-    const second=await f.call('POST','/api/v1/auth/login',{username:'PLAYER_A',password});const cookie2=cookieOf(second.headers['set-cookie']);
-    const changed=await f.call('PUT','/api/v1/auth/password',{oldPassword:password,newPassword:'new-password-456'},a.cookie);
-    assert.equal(changed.statusCode,200,changed.body);
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,cookie2)).json().user,null);
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,a.cookie)).json().user,null);
-    const fresh=cookieOf(changed.headers['set-cookie']);
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,fresh)).json().user.id,a.user.id);
-    await f.call('POST','/api/v1/auth/logout-all',undefined,fresh);
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,fresh)).json().user,null);
+    const fresh=f.session('user_newbie',{name:'新玩家'});
+    assert.deepEqual((await f.call('GET','/api/v1/auth/me',undefined,fresh)).json(),{user:null,account:{state:'link-required',suggestedName:'新玩家'}});
+    assert.equal((await f.call('PUT','/api/v1/games/clicker/saves/auto',save(),fresh)).json().error.code,'AUTH_REQUIRED');
+    assert.equal((await f.call('POST','/api/v1/auth/link/new',{role:'admin'},fresh)).statusCode,400);
+    const linked=await f.call('POST','/api/v1/auth/link/new',{displayName:'中文昵称'},fresh);
+    assert.equal(linked.statusCode,201,linked.body);
+    const u=linked.json().user;assert.equal(u.role,'player');assert.equal(u.username,'newbie');assert.equal(u.displayName,'中文昵称');
+    assert.equal((await f.call('POST','/api/v1/auth/link/new',{},fresh)).json().error.code,'ALREADY_LINKED');
+    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,fresh)).json().user.id,u.id);
+    // A second Clerk user whose email matches the same local part gets a free username.
+    const twin=await f.call('POST','/api/v1/auth/link/new',{},f.session('user_other',{email:'newbie@elsewhere.example'}));
+    assert.equal(twin.json().user.username,'newbie_2');
+    assert.equal((await f.call('GET','/api/v1/admin/games',undefined,fresh)).statusCode,403);
+    const profile=await f.call('PATCH','/api/v1/auth/me',{displayName:'改名'},fresh);
+    assert.equal(profile.json().user.displayName,'改名');assert.ok(!('passwordHash' in profile.json().user));
+    for(const route of ['/api/v1/auth/register','/api/v1/auth/login','/api/v1/auth/logout-all'])
+      assert.equal((await f.call('POST',route,{username:'x',password},fresh)).statusCode,404,route);
+    assert.equal((await f.call('PUT','/api/v1/auth/password',{oldPassword:password,newPassword:'x'.repeat(9)},fresh)).statusCode,404);
   }finally{await f.close();}
 });
 
-test('Cookie attributes, sliding renewal, expiration and CLI-style password reset',async()=>{
-  const f=await fixture({cookieSecure:true,publicOrigin:'https://games.example.com'});try{
-    const reg=await f.call('POST','/api/v1/auth/register',{username:'player_a',password});
-    const raw=String(reg.headers['set-cookie']);assert.match(raw,/__Host-gamehub_sid=/);assert.match(raw,/HttpOnly/);assert.match(raw,/Secure/);assert.match(raw,/SameSite=Lax/);assert.doesNotMatch(raw,/Domain=/);
-    const cookie=cookieOf(reg.headers['set-cookie']);
-    f.advance(25*3600000);
-    assert.ok((await f.call('GET','/api/v1/auth/me',undefined,cookie)).headers['set-cookie']);
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,cookie)).headers['set-cookie'],undefined);
-    await f.app.services.auth.resetPassword('player_a','reset-password-456');
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,cookie)).json().user,null);
-    const login=await f.call('POST','/api/v1/auth/login',{username:'player_a',password:'reset-password-456'});
-    f.advance(31*86400000);
-    assert.equal((await f.call('GET','/api/v1/auth/me',undefined,cookieOf(login.headers['set-cookie']))).json().user,null);
+test('Clerk tokens are only accepted when fresh, signed by the instance and minted for this site',async()=>{
+  const f=await fixture();try{
+    await f.user('player_a');
+    const now=Math.floor(Date.now()/1000);
+    const me=(cookie:string)=>f.call('GET','/api/v1/auth/me',undefined,cookie).then(r=>r.json().user);
+    assert.ok(await me(f.session('user_player_a')));
+    assert.equal(await me(f.session('user_player_a',{azp:'https://aichat.dkz12345.com'})),null);
+    assert.equal(await me(f.session('user_player_a',{iat:now-600,nbf:now-600,exp:now-300})),null);
+    assert.equal(await me(f.session('user_player_a',{iss:'https://clerk.example.com'})),null);
+    assert.equal(await me('__session='+createTestSigner().token({sub:'user_player_a',azp:f.config.publicOrigin})),null);
+    const bearer=await f.call('GET','/api/v1/auth/me',undefined,undefined,{authorization:'Bearer '+f.session('user_player_a').slice('__session='.length)});
+    assert.ok(bearer.json().user);
+  }finally{await f.close();}
+});
+
+test('claiming an old account links it once, keeps its saves and never leaks which part was wrong',async()=>{
+  const f=await fixture();try{
+    await f.game();
+    const legacy=await f.app.services.auth.create('legacy',password,'旧玩家');
+    f.app.db.prepare("INSERT INTO saves (user_id,game_id,slot,data_json,schema_version,size_bytes,revision,updated_at) SELECT ?,id,'auto','{\"score\":5}',1,11,1,? FROM games").run(legacy.id,Date.now());
+    const clerk=f.session('user_returning');
+    // Each attempt from its own address: the per-IP claim limit (5/min) has its own test.
+    let ip=0;
+    const claim=(body:Record<string,string>,cookie=clerk)=>f.app.inject({method:'POST',url:'/api/v1/auth/link/claim',remoteAddress:'10.0.0.'+(++ip),
+      headers:{'x-gamehub-request':'1',...(cookie?{cookie}:{})},payload:body});
+    assert.equal((await claim({username:'legacy',password:'wrong-password'})).json().error.code,'INVALID_CREDENTIALS');
+    assert.equal((await claim({username:'nobody',password})).json().error.code,'INVALID_CREDENTIALS');
+    assert.equal((await claim({username:'legacy',password},'')).json().error.code,'AUTH_REQUIRED');
+    const ok=await claim({username:'LEGACY',password});
+    assert.equal(ok.statusCode,200,ok.body);assert.equal(ok.json().user.id,legacy.id);assert.equal(ok.json().user.displayName,'旧玩家');
+    assert.deepEqual((await f.call('GET','/api/v1/games/clicker/saves/auto',undefined,clerk)).json().data,{score:5});
+    assert.equal((await claim({username:'legacy',password})).json().error.code,'ALREADY_LINKED');
+    assert.equal((await claim({username:'legacy',password},f.session('user_thief'))).json().error.code,'INVALID_CREDENTIALS');
+    // Clerk-created players have no password and can never be claimed.
+    const fresh=await f.user('player_b');
+    assert.equal((await claim({username:fresh.user.username,password:''},f.session('user_x'))).statusCode,400);
+    assert.equal((await claim({username:fresh.user.username,password},f.session('user_x'))).json().error.code,'INVALID_CREDENTIALS');
+  }finally{await f.close();}
+});
+
+test('the owner is admin, disabled players are blocked, and registration can be closed',async()=>{
+  const f=await fixture({allowRegistration:false});try{
+    const old=await f.app.services.auth.create('old_player',password);
+    const owner=f.session(OWNER);
+    assert.equal((await f.call('POST','/api/v1/auth/link/new',{},f.session('user_someone'))).json().error.code,'REGISTRATION_DISABLED');
+    const claimed=await f.call('POST','/api/v1/auth/link/claim',{username:'old_player',password},owner);
+    assert.equal(claimed.json().user.role,'admin');
+    assert.equal((await f.call('GET','/api/v1/admin/games',undefined,owner)).statusCode,200);
+    f.app.services.auth.setDisabled(old.id,true);
+    assert.deepEqual((await f.call('GET','/api/v1/auth/me',undefined,owner)).json().account,{state:'disabled',suggestedName:'owner'});
+    assert.equal((await f.call('GET','/api/v1/me/saves',undefined,owner)).json().error.code,'ACCOUNT_DISABLED');
+    f.app.services.auth.setDisabled(old.id,false);
+    assert.ok((await f.call('GET','/api/v1/auth/me',undefined,owner)).json().user);
   }finally{await f.close();}
 });
 
 test('write-request header, origin allowlist and multipart are protected',async()=>{
   const f=await fixture();try{
-    const bare=await f.app.inject({method:'POST',url:'/api/v1/auth/register',payload:{username:'bad',password}});
+    const clerk=f.session('user_bad');
+    const bare=await f.app.inject({method:'POST',url:'/api/v1/auth/link/new',headers:{cookie:clerk},payload:{}});
     assert.equal(bare.statusCode,403);
     for(const origin of ['https://evil.example','null','http://localhost:3220.attacker.com']){
-      assert.equal((await f.call('POST','/api/v1/auth/register',{username:'bad',password},undefined,{origin})).statusCode,403);
+      assert.equal((await f.call('POST','/api/v1/auth/link/new',{},clerk,{origin})).statusCode,403);
     }
     const cookie=await f.admin();f.app.services.games.create({slug:'upload',title:'Upload'});
     const m=multipartBody(await zip({'index.html':'test'}));
     const upload=await f.app.inject({method:'POST',url:'/api/v1/admin/games/upload/releases',headers:{cookie,'content-type':m.type},payload:m.body});
     assert.equal(upload.statusCode,403);
-    assert.equal((await f.call('POST','/api/v1/auth/logout',undefined,cookie,{origin:'http://localhost:3220'})).statusCode,200);
+    assert.equal((await f.call('PATCH','/api/v1/auth/me',{displayName:'Owner'},cookie,{origin:'http://localhost:3220'})).statusCode,200);
   }finally{await f.close();}
 });
 
-test('per-IP login limits cannot be bypassed with untrusted forwarded headers',async()=>{
+test('per-IP claim limits cannot be bypassed with untrusted forwarded headers',async()=>{
   const f=await fixture({trustProxy:true});try{
     let status=0;
-    for(let i=0;i<12;i++){
-      const response=await f.app.inject({method:'POST',url:'/api/v1/auth/login',remoteAddress:'203.0.113.50',
+    for(let i=0;i<8;i++){
+      const response=await f.app.inject({method:'POST',url:'/api/v1/auth/link/claim',remoteAddress:'203.0.113.50',
         headers:{'x-gamehub-request':'1','x-forwarded-for':'198.51.100.'+i},payload:{username:'unknown',password}});
       status=response.statusCode;
     }

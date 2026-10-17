@@ -40,12 +40,19 @@ COOKIE_SECURE=true
 TRUST_PROXY=true
 X_ACCEL_REDIRECT=true
 ALLOW_REGISTRATION=true
+CLERK_PUBLISHABLE_KEY=pk_live_Y2xlcmsuZGt6MTIzNDUuY29tJA
+CLERK_JWT_KEY_FILE=/etc/game-hub-clerk-jwt.pem
 API_DOCS=true
 SPA_FALLBACK=false
 LOG_LEVEL=info
 ENV
     chown root:gamehub /etc/game-hub.env
     chmod 640 /etc/game-hub.env
+fi
+# Shared Clerk login: public values only (publishable key + JWT public key). OWNER_CLERK_USER_ID is set by hand.
+install -m 644 "$dest/deploy/clerk-dkz12345.pem" /etc/game-hub-clerk-jwt.pem
+if ! grep -q '^CLERK_PUBLISHABLE_KEY=' /etc/game-hub.env; then
+    printf '%s\n' 'CLERK_PUBLISHABLE_KEY=pk_live_Y2xlcmsuZGt6MTIzNDUuY29tJA' 'CLERK_JWT_KEY_FILE=/etc/game-hub-clerk-jwt.pem' >> /etc/game-hub.env
 fi
 if [ ! -f "$base/frontend/index.html" ]; then install -m 644 "$dest/public/index.html" "$base/frontend/index.html"; fi
 if [ -n "$previous" ] && [ -f /var/lib/game-hub/game-hub.sqlite ]; then

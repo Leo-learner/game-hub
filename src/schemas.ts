@@ -32,7 +32,11 @@ export const ErrorSchema = T.Object({
   requestId:T.String(),
 },{$id:'ApiError'});
 export const Ok = T.Object({ok:T.Literal(true)},{$id:'Ok'});
-export const UserEnvelope = T.Object({user:T.Union([T.Ref(User),T.Null()])},{$id:'UserEnvelope'});
+// account: signed in with Clerk but no player profile yet (choose new player or claim an old account), or blocked.
+export const UserEnvelope = T.Object({
+  user:T.Union([T.Ref(User),T.Null()]),
+  account:T.Optional(T.Object({state:T.Union([T.Literal('link-required'),T.Literal('disabled')]),suggestedName:T.Optional(T.String())})),
+},{$id:'UserEnvelope'});
 export const GamePage = T.Object({items:T.Array(T.Ref(Game)),page:T.Integer(),pageSize:T.Integer(),total:T.Integer()},{$id:'GamePage'});
 export const SavePage = T.Object({items:T.Array(T.Ref(SaveSummary)),page:T.Integer(),pageSize:T.Integer(),total:T.Integer()},{$id:'SavePage'});
 export const SaveWrite = T.Object({data:T.Record(T.String(),T.Unknown()),schemaVersion:T.Integer({minimum:1,maximum:2147483647}),expectedRevision:Revision},{$id:'SaveWrite',additionalProperties:false});
@@ -42,12 +46,9 @@ export const GameCreate = T.Object({
   sortOrder:T.Optional(T.Integer({minimum:-1000000,maximum:1000000})),
 },{$id:'GameCreate',additionalProperties:false});
 export const GamePatch = T.Partial(T.Omit(GameCreate,['slug']),{$id:'GamePatch',additionalProperties:false,minProperties:1});
-export const Register = T.Object({
-  username:T.String({pattern:'^[A-Za-z0-9_]{3,20}$'}),password:T.String({minLength:8,maxLength:128}),
-  displayName:T.Optional(T.String({minLength:1,maxLength:24})),
-},{$id:'Register',additionalProperties:false});
-export const Login = T.Object({username:T.String({minLength:1,maxLength:20}),password:T.String({minLength:1,maxLength:128})},{$id:'Login',additionalProperties:false});
-export const schemas = [User,ManifestSchema,Game,Release,SaveMeta,Save,SaveSummary,ErrorSchema,Ok,UserEnvelope,GamePage,SavePage,SaveWrite,GameCreate,GamePatch,Register,Login];
+export const LinkNew = T.Object({displayName:T.Optional(T.String({minLength:1,maxLength:24}))},{$id:'LinkNew',additionalProperties:false});
+export const Claim = T.Object({username:T.String({minLength:1,maxLength:20}),password:T.String({minLength:1,maxLength:128})},{$id:'Claim',additionalProperties:false});
+export const schemas = [User,ManifestSchema,Game,Release,SaveMeta,Save,SaveSummary,ErrorSchema,Ok,UserEnvelope,GamePage,SavePage,SaveWrite,GameCreate,GamePatch,LinkNew,Claim];
 export const paramsGame = T.Object({slug:Slug});
 export const paramsSave = T.Object({slug:Slug,slot:Slot});
 export const Pagination = T.Object({

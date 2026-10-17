@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export type Db = Database.Database;
-export const schemaVersion = 1;
+export const schemaVersion = 2;
 export function openDb(dataDir: string): Db {
   mkdirSync(dataDir, { recursive: true, mode: 0o750 });
   const file = path.join(dataDir, 'game-hub.sqlite');
@@ -33,7 +33,10 @@ export function assertMigrated(db: Db): void {
     throw new Error('Database schema is not ready. Run npm run migrate before starting.');
   }
 }
-export interface UserRow { id: string; username: string; display_name: string; password_hash: string; role: 'player'|'admin'; created_at: number }
+export interface UserRow {
+  id: string; username: string; display_name: string; password_hash: string; role: 'player'|'admin'; created_at: number;
+  clerk_user_id: string|null; linked_at: number|null; disabled_at: number|null;
+}
 export interface GameRow { id: string; slug: string; title: string; description: string; tags_json: string; sort_order: number; published: number; current_release_id: string|null; created_at: number; updated_at: number }
 export interface Manifest { manifestVersion: 1; cover?: string; saveSchemaVersion: number; saveSlots: number }
 export interface FileRecord { path: string; size: number; sha256: string }
