@@ -192,6 +192,9 @@ export async function buildApp(c:Config) {
     allowedPath:file=>!/^\/?(api|play|docs|sdk|openapi\.json|healthz|readyz|_gamehub_internal)(\/|$)/.test(file)});
   app.setNotFoundHandler((req,reply)=>{
     const url=req.url.split('?')[0];
+    // A hash route that arrived with its "#" percent-encoded (Clerk's /v1/client/touch redirect does this): send it back to the page.
+    // The rest stays percent-encoded; the page's router decodes hash segments itself.
+    if(req.method==='GET'&&/^\/%23/i.test(url))return reply.redirect('/#'+url.slice(4),302);
     if(c.spaFallback&&req.method==='GET'&&req.headers.accept?.includes('text/html')&&!/^\/(api|play|docs|sdk|openapi\.json|healthz|readyz|_gamehub_internal)(\/|$)/.test(url)&&existsSync(path.join(c.publicDir,'index.html')))
       return reply.type('text/html').send(createReadStream(path.join(c.publicDir,'index.html')));
     return reply.code(404).send({error:{code:'NOT_FOUND',message:'资源不存在'},requestId:req.id});

@@ -194,7 +194,7 @@ function finishLink(user, msg) {
 }
 async function logout() {
   S.modal = null; S.saves = []; S.needsReload = false; client.auth.forget(); render();
-  try { await signOut(location.origin + location.pathname + '#/'); }
+  try { await signOut(location.origin + '/'); }
   catch { await refreshAccount(); render(); toast('退出失败，请稍后重试'); }
 }
 function askDelete(slug, slot) {
