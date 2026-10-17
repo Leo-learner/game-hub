@@ -83,15 +83,17 @@ export function createMcpServer(services: ToolServices, actor: Actor) {
     {slug, releaseId: z.uuid()}, ({slug, releaseId}) => games.publish(slug, releaseId), true, true);
   register('unpublish_game', '下架游戏，停止公开游玩。保留游戏资料、版本和玩家存档，可再次发布恢复。', 'content', false,
     {slug}, ({slug}) => games.unpublish(slug), true, true);
-  register('list_players', '分页查询普通玩家的账号资料和存档数量。不会返回密码、会话令牌或存档正文，不包含管理员。', 'accounts', true,
+  register('list_players', '分页查询普通玩家的账号资料和存档数量。linked 表示已关联统一的 Clerk 账号（未关联的是还没认领的旧账号），disabled 表示已在本站停用。不会返回密码、Clerk 资料或存档正文，不包含管理员。', 'accounts', true,
     {page, pageSize, q: z.string().max(100).optional()}, args => {
       const query = '%' + (args.q ?? '').replace(/[\\%_]/g, '\\$&') + '%';
       const where = "u.role='player' AND (u.username LIKE ? ESCAPE '\\' OR u.display_name LIKE ? ESCAPE '\\')";
       return {
         items: db.prepare(`SELECT u.id,u.username,u.display_name AS displayName,u.created_at AS createdAt,
+          u.clerk_user_id IS NOT NULL AS linked,u.disabled_at IS NOT NULL AS disabled,
           (SELECT COUNT(*) FROM saves s WHERE s.user_id=u.id AND s.deleted_at IS NULL) AS saveSlots
           FROM users u WHERE ${where} ORDER BY u.created_at DESC,u.id LIMIT ? OFFSET ?`)
-          .all(query, query, args.pageSize, (args.page - 1) * args.pageSize),
+          .all(query, query, args.pageSize, (args.page - 1) * args.pageSize)
+          .map(row => ({...(row as Record<string, unknown>), linked: !!(row as {linked: number}).linked, disabled: !!(row as {disabled: number}).disabled})),
         total: (db.prepare(`SELECT COUNT(*) AS n FROM users u WHERE ${where}`).get(query, query) as {n: number}).n,
         page: args.page, pageSize: args.pageSize,
       };
@@ -101,12 +103,8 @@ export function createMcpServer(services: ToolServices, actor: Actor) {
     if (!user) fail(404, 'PLAYER_NOT_FOUND', '普通玩家不存在；管理员账号请通过服务器 CLI 维护');
     return user;
   }
-  register('revoke_player_sessions', '使指定普通玩家的全部登录会话失效；不会改动存档，玩家可以重新登录。', 'accounts', false,
-    {playerId: z.uuid()}, ({playerId}) => {auth.logoutAll(player(playerId).id); return {playerId, revoked: true};}, true, true);
-  register('reset_player_password', '为指定普通玩家设置新密码，同时撤销全部登录会话。只在用户明确授权重置时调用；新密码不写入操作日志。', 'accounts', false,
-    {playerId: z.uuid(), newPassword: z.string().min(8).max(128)}, async ({playerId, newPassword}) => {
-      await auth.resetPassword(player(playerId).username, newPassword); return {playerId, reset: true, sessionsRevoked: true};
-    }, true, true);
+  register('set_player_disabled', '在本站停用或恢复指定普通玩家：停用后该玩家用 Clerk 登录也读写不了云存档，存档保留。不影响该玩家在其他网站的 Clerk 账号；要全站强制下线请到 Clerk 后台操作。', 'accounts', false,
+    {playerId: z.uuid(), disabled: z.boolean()}, ({playerId, disabled}) => {auth.setDisabled(player(playerId).id, disabled); return {playerId, disabled};}, true, true);
   register('list_backups', '列出最近的数据库和游戏文件备份。仅有清单不等于刚通过完整性校验。', 'read', true,
     {limit: z.number().int().min(1).max(50).default(20)}, ({limit}) => operations.listBackups(limit));
   register('create_backup', '创建数据库及游戏版本的一致性备份，完成后校验所有文件；按既有策略清理超过 7 天的完整备份。可能需要数分钟。', 'ops', false,

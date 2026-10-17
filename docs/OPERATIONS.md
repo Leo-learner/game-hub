@@ -13,15 +13,17 @@
 | PUBLIC_DIR | ./public；生产 /opt/apps/game-hub/frontend |
 | COOKIE_SECURE | 生产必须 true |
 | TRUST_PROXY | 生产 true，仅信任回环代理 |
-| SESSION_TTL_DAYS | 30 |
 | SAVE_MAX_BYTES / SAVE_MAX_SLOTS | 1048576 / 10 |
 | UPLOAD_MAX_BYTES / EXTRACT_MAX_BYTES / UPLOAD_MAX_FILES | 52428800 / 209715200 / 10000 |
-| ALLOW_REGISTRATION / API_DOCS | true / true |
+| ALLOW_REGISTRATION / API_DOCS | true / true（ALLOW_REGISTRATION=false 时只能认领旧账号，不能新建玩家） |
+| CLERK_PUBLISHABLE_KEY | pk_live_Y2xlcmsuZGt6MTIzNDUuY29tJA（公开值） |
+| CLERK_JWT_KEY_FILE | /etc/game-hub-clerk-jwt.pem（Clerk 实例的 JWT **公钥**，install.sh 从 deploy/clerk-dkz12345.pem 安装） |
+| OWNER_CLERK_USER_ID | 站长的 Clerk user id，此用户即管理员；需在服务器上手动写入 |
 | SPA_FALLBACK | false |
 | X_ACCEL_REDIRECT | 本地 false，配套 Nginx 后生产 true |
 | LOG_LEVEL | info |
 
-修改配置后重启 game-hub。生产 NODE_ENV=production 时拒绝不安全 Cookie 或 HTTP PUBLIC_ORIGIN。当前身份与私有数据响应均不缓存。
+修改配置后重启 game-hub。生产 NODE_ENV=production 时拒绝不安全 Cookie、HTTP PUBLIC_ORIGIN 或缺少 Clerk 配置。当前身份与私有数据响应均不缓存。
 
 ## 首次部署及后续升级
 
@@ -52,8 +54,8 @@ bash scripts/deploy.sh
 ```bash
 cd /opt/apps/game-hub/current
 sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js users list
-sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js create-admin admin
-sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js reset-password player_name
+# 只对还没认领的旧账号有效：玩家忘了旧密码时，重置后再让对方在「认领旧账号」里使用
+sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js reset-password old_player_name
 sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js games create my-game "我的游戏"
 sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js games import /path/to/game --game my-game
 sudo runuser -u gamehub -g www-data -G gamehub -- node --env-file=/etc/game-hub.env dist/scripts/admin.js games publish my-game <releaseId>

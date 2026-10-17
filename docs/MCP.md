@@ -66,9 +66,8 @@ claude
 | content | `prepare_game_upload` | `slug`；返回一次性上传地址和凭证 |
 | content | `publish_game` | `slug`, `releaseId`；发布指定版本或回滚到旧版本 |
 | content | `unpublish_game` | `slug`；下架但保留版本、存档 |
-| accounts | `list_players` | `page`, `pageSize`, 可选 `q`；普通玩家和存档数量 |
-| accounts | `revoke_player_sessions` | `playerId`；撤销普通玩家全部登录会话 |
-| accounts | `reset_player_password` | `playerId`, `newPassword`；重置密码并撤销会话 |
+| accounts | `list_players` | `page`, `pageSize`, 可选 `q`；普通玩家、存档数量、是否已关联 Clerk（linked）、是否停用（disabled） |
+| accounts | `set_player_disabled` | `playerId`, `disabled`；在本站停用或恢复玩家（不影响其 Clerk 账号；全站下线去 Clerk 后台） |
 | read | `list_backups` | `limit` 1–50；返回备份 ID 和清单摘要 |
 | ops | `create_backup` | 无参数；备份并校验，按既有策略保留 7 天 |
 | ops | `verify_backup` | `backupId`；验证数据库、ZIP 及全部文件摘要 |

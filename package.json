@@ -20,6 +20,7 @@
     "mcp:admin": "tsx scripts/mcp-admin.ts"
   },
   "dependencies": {
+    "@clerk/backend": "3.22.0",
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/multipart": "^9.4.0",

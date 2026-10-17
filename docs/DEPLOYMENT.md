@@ -38,7 +38,7 @@
 
 `/Users/leo/Desktop/game_site/docs/deployment-private/admin-credentials.txt`
 
-父目录权限 700，文件权限 600；未进入部署包或 Git。可在存档接入示例登录，再在同域 `/docs` 调用管理员接口。正式管理界面由你自行实现。密码修改接口为 `PUT /api/v1/auth/password`；服务器重置方法见 OPERATIONS.md。
+父目录权限 700，文件权限 600；未进入部署包或 Git。2026-10 起登录改用 dkz12345.com 统一的 Clerk 账号：`OWNER_CLERK_USER_ID` 的用户就是管理员；旧的 admin 密码只在第一次用 Clerk 登录、选择「认领旧账号」时用一次。站内不再有改密码接口，密码与两步验证都在 https://accounts.dkz12345.com/user 管理。前端更新时除了 index.html、app.js、app.css，还要把 `public/vendor/clerk-boot.js` 复制到 frontend/vendor/。
 
 ## 验证结果
 

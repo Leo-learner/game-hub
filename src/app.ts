@@ -15,13 +15,14 @@ import type { Config } from './config.js';
 import { openDb, assertMigrated, type Db, type UserRow, type ReleaseRow, type FileRecord } from './db/index.js';
 import { AppError, fail } from './errors.js';
 import * as S from './schemas.js';
-import { AuthService, publicUser } from './modules/auth.js';
+import { AuthService, publicUser, type ClerkIdentity } from './modules/auth.js';
+import { createClerkGate } from './lib/clerk-gate/clerk-gate.js';
 import { GameService } from './modules/games.js';
 import { SaveService } from './modules/saves.js';
 import { ReleaseService, safeRelative } from './modules/releases.js';
 
 declare module 'fastify' {
-  interface FastifyRequest { user:UserRow|null; sessionToken:string|null }
+  interface FastifyRequest { user:UserRow|null; clerk:ClerkIdentity|null; accountState:'link-required'|'disabled'|null }
   interface FastifyInstance { db:Db; services:{auth:AuthService;games:GameService;saves:SaveService;releases:ReleaseService} }
 }
 export async function buildApp(c:Config) {
@@ -37,13 +38,15 @@ export async function buildApp(c:Config) {
   const auth=new AuthService(db,c);await auth.init();
   const games=new GameService(db,c),saves=new SaveService(db,c,games),releases=new ReleaseService(db,c,games);
   app.decorate('db',db);app.decorate('services',{auth,games,saves,releases});
-  app.decorateRequest('user',null);app.decorateRequest('sessionToken',null);
+  app.decorateRequest('user',null);app.decorateRequest('clerk',null);app.decorateRequest('accountState',null);
+  // Shared Clerk login: verify the short-lived __session token with the public key only.
+  const gate=c.clerk?createClerkGate({publishableKey:c.clerk.publishableKey,jwtKey:c.clerk.jwtKey,authorizedParties:[c.publicOrigin]}):null;
   const expire=()=>{const now=c.now();db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(now);db.prepare('DELETE FROM idempotency_keys WHERE expires_at<=?').run(now);};
   expire();const timer=setInterval(expire,3600000);timer.unref();
   app.addHook('onClose',async()=>{clearInterval(timer);db.close();});
   for(const schema of S.schemas)app.addSchema(schema);
-  await app.register(swagger,{openapi:{openapi:'3.0.3',info:{title:'Game Hub API',version:'1.0.0',description:'独立小游戏平台后端；生产同域 Cookie 登录。所有写请求携带 X-GameHub-Request: 1。'},servers:[{url:c.publicOrigin}],
-    components:{securitySchemes:{cookieAuth:{type:'apiKey',in:'cookie',name:c.cookieName}}}},
+  await app.register(swagger,{openapi:{openapi:'3.0.3',info:{title:'Game Hub API',version:'1.0.0',description:'独立小游戏平台后端；登录用 dkz12345.com 统一的 Clerk 账号（同域 __session Cookie）。所有写请求携带 X-GameHub-Request: 1。'},servers:[{url:c.publicOrigin}],
+    components:{securitySchemes:{cookieAuth:{type:'apiKey',in:'cookie',name:gate?.cookieNames[0]??'__session'}}}},
     refResolver:{buildLocalReference:json=>String(json.$id)}});
   await app.register(cors,{origin:(origin,cb)=>cb(null,!origin||c.allowedOrigins.includes(origin)),
     credentials:true,methods:['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
@@ -51,8 +54,6 @@ export async function buildApp(c:Config) {
   await app.register(cookie);
   await app.register(rateLimit,{global:true,max:300,timeWindow:'1 minute',errorResponseBuilder:()=>({statusCode:429,code:'RATE_LIMITED',error:'Too Many Requests',message:'请求过于频繁'})});
   await app.register(multipart,{limits:{fileSize:c.uploadMaxBytes,files:1,fields:0,parts:1},throwFileSizeLimit:true});
-  const setSession=(reply:FastifyReply,token:string)=>reply.setCookie(c.cookieName,token,{httpOnly:true,secure:c.cookieSecure,sameSite:'lax',path:'/',maxAge:Math.floor(c.sessionTtlMs/1000)});
-  const clearSession=(reply:FastifyReply)=>reply.clearCookie(c.cookieName,{httpOnly:true,secure:c.cookieSecure,sameSite:'lax',path:'/'});
   app.addHook('onRequest',async(req,reply)=>{
     reply.header('X-Content-Type-Options','nosniff').header('Referrer-Policy','same-origin').header('X-Request-Id',req.id);
     if(req.url.startsWith('/api/'))reply.header('Cache-Control','no-store');
@@ -61,12 +62,17 @@ export async function buildApp(c:Config) {
       const origin=req.headers.origin;
       if(origin!==undefined&&!c.allowedOrigins.includes(origin))fail(403,'ORIGIN_REJECTED','请求来源不允许');
     }
-    const token=req.cookies[c.cookieName];
-    const session=auth.lookup(token);
-    if(session){
-      req.user=session.user;req.sessionToken=token!;
-      if(session.renew){auth.touch(token!);setSession(reply,token!);}
-    }else if(token)clearSession(reply);
+    if(gate&&req.url.startsWith('/api/')){
+      const result=await gate.authenticate(req.headers);
+      if(result.ok){
+        const {id,email,username,name}=result.user;
+        req.clerk={id,email,username,name};
+        const row=auth.byClerk(id);
+        if(!row)req.accountState='link-required';
+        else if(row.disabled_at!==null)req.accountState='disabled';
+        else req.user=id===c.clerk!.ownerUserId?{...row,role:'admin'}:row;
+      }
+    }
     const expected=req.headers['x-gamehub-user'];
     if(expected!==undefined&&expected!==req.user?.id)fail(409,'ACCOUNT_CHANGED','当前账号已变化，请重新读取登录状态');
   });
@@ -95,32 +101,35 @@ export async function buildApp(c:Config) {
         ...(writing?{headers:S.writeHeaders}:{}),
         security:opts.auth?[{cookieAuth:[]}]:[],response:S.responses(opts.response,status)},
       preHandler:async(req,reply)=>{
-        if(opts.auth&&!req.user)fail(401,'AUTH_REQUIRED','请先登录');
+        if(opts.auth&&!req.user){
+          if(req.accountState==='disabled')fail(403,'ACCOUNT_DISABLED','这个玩家档案已被停用');
+          fail(401,'AUTH_REQUIRED','请先登录');
+        }
         if(opts.auth==='admin'&&req.user?.role!=='admin')fail(403,'ADMIN_REQUIRED','需要管理员权限');
         reply.code(status);
       },handler:handler as RouteHandlerMethod});
   }
-  add('POST','/auth/register','register','Auth',{body:S.Register,response:T.Ref(S.UserEnvelope),status:201,max:5},async(req,reply)=>{
-    if(!c.allowRegistration)fail(403,'REGISTRATION_DISABLED','暂未开放注册');
-    const u=await auth.create(req.body.username,req.body.password,req.body.displayName);
-    setSession(reply,auth.issue(u.id,req.sessionToken??undefined));return {user:publicUser(u)};
+  const suggestedName=(i:ClerkIdentity)=>[...(i.name||i.username||i.email?.split('@')[0]||'')].slice(0,24).join('');
+  const linking=(req:FastifyRequest)=>{
+    if(!req.clerk)fail(401,'AUTH_REQUIRED','请先登录');
+    if(req.accountState!=='link-required')fail(409,'ALREADY_LINKED','这个账号已经关联了玩家档案');
+    return req.clerk;
+  };
+  add('GET','/auth/me','getCurrentUser','Auth',{response:T.Ref(S.UserEnvelope)},async req=>({
+    user:req.user?publicUser(req.user):null,
+    ...(req.accountState&&req.clerk?{account:{state:req.accountState,suggestedName:suggestedName(req.clerk)}}:{}),
+  }));
+  add('POST','/auth/link/new','linkNewPlayer','Auth',{body:S.LinkNew,response:T.Ref(S.UserEnvelope),status:201,max:10,description:'已用 Clerk 登录、还没有玩家档案时：新建一个。'},async req=>{
+    const clerk=linking(req);
+    if(!c.allowRegistration)fail(403,'REGISTRATION_DISABLED','暂未开放新玩家注册');
+    return {user:publicUser(auth.linkNew(clerk,req.body.displayName))};
   });
-  add('POST','/auth/login','login','Auth',{body:S.Login,response:T.Ref(S.UserEnvelope),max:10},async(req,reply)=>{
-    const u=await auth.login(req.body.username,req.body.password);
-    setSession(reply,auth.issue(u.id,req.sessionToken??undefined));return {user:publicUser(u)};
+  add('POST','/auth/link/claim','claimOldAccount','Auth',{body:S.Claim,response:T.Ref(S.UserEnvelope),max:5,description:'已用 Clerk 登录、还没有玩家档案时：用旧用户名和密码认领原来的档案（只需一次）。'},async req=>{
+    const user=await auth.claim(linking(req),req.body.username,req.body.password);
+    return {user:publicUser(user.clerk_user_id===c.clerk?.ownerUserId?{...user,role:'admin'}:user)};
   });
-  add('POST','/auth/logout','logout','Auth',{response:T.Ref(S.Ok)},async(req,reply)=>{
-    auth.logout(req.sessionToken??undefined);clearSession(reply);return {ok:true};
-  });
-  add('POST','/auth/logout-all','logoutAll','Auth',{response:T.Ref(S.Ok),auth:'user'},async(req,reply)=>{
-    auth.logoutAll(req.user!.id);clearSession(reply);return {ok:true};
-  });
-  add('GET','/auth/me','getCurrentUser','Auth',{response:T.Ref(S.UserEnvelope)},async req=>({user:req.user?publicUser(req.user):null}));
   add('PATCH','/auth/me','updateProfile','Auth',{body:T.Object({displayName:T.String({minLength:1,maxLength:24})},{additionalProperties:false}),response:T.Ref(S.UserEnvelope),auth:'user'},
     async req=>({user:publicUser(auth.updateName(req.user!,req.body.displayName))}));
-  add('PUT','/auth/password','changePassword','Auth',{body:T.Object({oldPassword:T.String({minLength:1,maxLength:128}),newPassword:T.String({minLength:8,maxLength:128})},{additionalProperties:false}),response:T.Ref(S.Ok),auth:'user',max:5},async(req,reply)=>{
-    await auth.changePassword(req.user!,req.body.oldPassword,req.body.newPassword);setSession(reply,auth.issue(req.user!.id));return {ok:true};
-  });
   const gameQuery=T.Composite([S.Pagination,T.Object({q:T.Optional(T.String({maxLength:100})),tag:T.Optional(T.String({maxLength:32}))})],{additionalProperties:false});
   add('GET','/games','listGames','Games',{query:gameQuery,response:T.Ref(S.GamePage)},async req=>games.list(req.query));
   add('GET','/games/:slug','getGame','Games',{params:S.paramsGame,response:T.Ref(S.Game)},async req=>games.present(games.get(req.params.slug,true)));

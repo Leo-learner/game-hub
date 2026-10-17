@@ -32,16 +32,17 @@ npm start
 
 生产环境使用 Node.js 22、SQLite、systemd 和 Nginx。数据库迁移显式执行，服务启动不会自动修改表结构。
 
-## 初始化管理员与发布示例游戏
+## 登录、管理员与发布示例游戏
+
+登录用 dkz12345.com 统一的 Clerk 账号（账号页 https://accounts.dkz12345.com）。服务端只用公钥在本地校验 `__session` 令牌，不放 Clerk 私钥；需要 `CLERK_PUBLISHABLE_KEY` 和 `CLERK_JWT_KEY_FILE`（或 `CLERK_JWT_KEY`）。`OWNER_CLERK_USER_ID` 对应的 Clerk 用户就是管理员。玩家第一次用 Clerk 登录时，选「新玩家」或用旧用户名、密码「认领旧账号」（只需一次）。
 
 ```bash
-npm run admin -- create-admin admin
 npm run admin -- games create example-clicker "存档接入示例"
 npm run admin -- games import examples/example-clicker --game example-clicker
 npm run admin -- games publish example-clicker <上一条命令返回的版本ID>
 ```
 
-创建管理员时隐藏输入密码。公网注册始终只能创建普通玩家。也可以通过管理员 API 上传 ZIP 并发布，无需制作管理页面后才能使用。
+新玩家始终是普通玩家。也可以通过管理员 API 上传 ZIP 并发布，无需制作管理页面后才能使用。
 
 游戏发布后从 `GET /api/v1/games/example-clicker` 的 `launchUrl` 打开。示例支持游客点击、注册、登录、云端保存、刷新读档和删除存档，不使用游客本地存储。
 

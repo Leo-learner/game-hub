@@ -15,6 +15,15 @@ export class ApiError extends Error {
   constructor(public status:number,public code:string,message:string,public details?:Record<string,unknown>,public requestId?:string){super(message);this.name='ApiError';}
 }
 export interface ClientOptions { baseUrl?:string; fetch?:typeof fetch }
+export type AccountEnvelope=components['schemas']['UserEnvelope'];
+type RefreshHook=()=>Promise<unknown>;
+// The hub page keeps the short-lived Clerk session cookie fresh and exposes this
+// hook; games in the same-origin iframe borrow it when a request comes back 401.
+function refreshHook():RefreshHook|undefined{
+  const own=(globalThis as {__gameHubRefreshAuth?:RefreshHook}).__gameHubRefreshAuth;
+  if(own)return own;
+  try{return (globalThis.parent as unknown as {__gameHubRefreshAuth?:RefreshHook}|undefined)?.__gameHubRefreshAuth;}catch{return undefined;}
+}
 export interface SaveOptions { idempotencyKey?:string; signal?:AbortSignal; retries?:number }
 export function createClient(options:ClientOptions={}) {
   const base=(options.baseUrl??'/api/v1').replace(/\/$/,'');
@@ -22,7 +31,7 @@ export function createClient(options:ClientOptions={}) {
   let known=false,currentUser:User|null=null,epoch=0;
   const listeners=new Set<(user:User|null)=>void>();
   function setUser(user:User|null){const changed=!known||currentUser?.id!==user?.id;known=true;currentUser=user;if(changed){epoch++;for(const listener of listeners)listener(user);}}
-  async function request<R>(method:string,route:string,body?:unknown,extra:RequestInit={}):Promise<R>{
+  async function request<R>(method:string,route:string,body?:unknown,extra:RequestInit={},retried=false):Promise<R>{
     const headers=new Headers(extra.headers);
     if(method!=='GET')headers.set('X-GameHub-Request','1');
     let payload:BodyInit|undefined;
@@ -32,8 +41,13 @@ export function createClient(options:ClientOptions={}) {
     const value=await response.json().catch(()=>null);
     if(!response.ok){
       const err=value?.error;
-      // Only a missing/expired session means logged out; INVALID_CREDENTIALS (wrong password) leaves the session intact.
-      if(response.status===401&&err?.code==='AUTH_REQUIRED')setUser(null);
+      if(response.status===401&&err?.code==='AUTH_REQUIRED'){
+        // The Clerk token lives about a minute; refresh it once and retry before treating this as signed out.
+        const refresh=retried?undefined:refreshHook();
+        if(refresh&&!extra.signal?.aborted){await refresh().catch(()=>undefined);return request<R>(method,route,body,extra,true);}
+        // Only a missing/expired session means logged out; INVALID_CREDENTIALS (wrong old password) leaves the state intact.
+        setUser(null);
+      }
       throw new ApiError(response.status,err?.code??'HTTP_ERROR',err?.message??'请求失败',err?.details,value?.requestId);
     }
     return value as R;
@@ -41,14 +55,17 @@ export function createClient(options:ClientOptions={}) {
   const segment=(value:string)=>encodeURIComponent(value);
   const game=(slug:string)=>'/games/'+segment(slug);
   const query=(params:Record<string,string|number|undefined>)=>{const q=new URLSearchParams();for(const [key,value]of Object.entries(params))if(value!==undefined)q.set(key,String(value));return q.size?'?'+q.toString():'';};
+  // Signing in and out happens on the shared Clerk account (accounts.dkz12345.com);
+  // these calls only read or create this site's player profile.
   const auth={
-    async me(){const result=await request<{user:User|null}>('GET','/auth/me');setUser(result.user);return result.user;},
-    async register(input:components['schemas']['Register']){const result=await request<{user:User}>('POST','/auth/register',input);setUser(result.user);return result.user;},
-    async login(input:components['schemas']['Login']){const result=await request<{user:User}>('POST','/auth/login',input);setUser(result.user);return result.user;},
-    async logout(){await request('POST','/auth/logout');setUser(null);},
-    async logoutAll(){await request('POST','/auth/logout-all');setUser(null);},
+    async me(){const result=await request<AccountEnvelope>('GET','/auth/me');setUser(result.user);return result.user;},
+    /** Like me(), plus whether a signed-in Clerk user still has to pick "new player" or claim an old account. */
+    async account(){const result=await request<AccountEnvelope>('GET','/auth/me');setUser(result.user);return result;},
+    async linkNew(displayName?:string){const result=await request<{user:User}>('POST','/auth/link/new',displayName?{displayName}:{});setUser(result.user);return result.user;},
+    async claim(username:string,password:string){const result=await request<{user:User}>('POST','/auth/link/claim',{username,password});setUser(result.user);return result.user;},
     async updateProfile(displayName:string){const r=await request<{user:User}>('PATCH','/auth/me',{displayName});setUser(r.user);return r.user;},
-    async changePassword(oldPassword:string,newPassword:string){await request('PUT','/auth/password',{oldPassword,newPassword});},
+    /** Call after the page signed out of Clerk, so listeners drop the user and pending saves. */
+    forget(){setUser(null);},
   };
   async function owner(){if(!known)await auth.me();if(!currentUser)throw new ApiError(401,'AUTH_REQUIRED','请先登录后再使用云存档');return currentUser.id;}
   const saves={

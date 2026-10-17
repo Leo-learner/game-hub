@@ -56,7 +56,7 @@ test('MCP official client discovers tools/resources/prompts; scopes, expiry and 
   try {
     const full = f.token(), read = f.token(['read']);
     const client = await f.client(full.secret), viewer = await f.client(read.secret);
-    assert.equal((await client.listTools()).tools.length, 17);
+    assert.equal((await client.listTools()).tools.length, 16);
     assert.deepEqual((await viewer.listTools()).tools.map(t => t.name).sort(), ['get_game', 'get_site_status', 'list_backups', 'list_games']);
     await assert.rejects(() => f.call(viewer, 'create_game', {slug: 'blocked', title: 'blocked'}), /not found/);
     assert.equal(f.games.list({}, true).total, 0);
@@ -147,24 +147,22 @@ test('Expired/revoked upload tickets and invalid ZIPs fail without publication',
   } finally {await f.close();}
 });
 
-test('Player maintenance cannot target admins; reset revokes sessions and never audits passwords', async () => {
+test('Player maintenance cannot target admins; disabling blocks a player locally and never audits secrets', async () => {
   const f = await fixture();
   try {
     const credential = f.token(['accounts']), client = await f.client(credential.secret);
     const player = await f.auth.create('mcp_player', 'old-password-1'), admin = await f.auth.create('admin', 'admin-password-1', 'Admin', 'admin');
-    const session = f.auth.issue(player.id);
     const listing = (await f.call(client, 'list_players')).data;
     assert.equal(listing.total, 1); assert.ok(!JSON.stringify(listing).includes('password'));
-    const password = 'new-secret-password-29';
-    assert.equal((await f.call(client, 'reset_player_password', {playerId: player.id, newPassword: password})).data.reset, true);
-    assert.equal(f.auth.lookup(session), null);
-    assert.equal((await f.auth.login(player.username, password)).id, player.id);
-    const session2 = f.auth.issue(player.id);
-    assert.equal((await f.call(client, 'revoke_player_sessions', {playerId: player.id})).data.revoked, true);
-    assert.equal(f.auth.lookup(session2), null);
-    assert.equal((await f.call(client, 'reset_player_password', {playerId: admin.id, newPassword: password})).raw.isError, true);
+    assert.equal(listing.items[0].linked, false); assert.equal(listing.items[0].disabled, false);
+    assert.equal((await f.call(client, 'set_player_disabled', {playerId: player.id, disabled: true})).data.disabled, true);
+    assert.equal((await f.call(client, 'list_players')).data.items[0].disabled, true);
+    assert.equal((await f.call(client, 'set_player_disabled', {playerId: player.id, disabled: false})).data.disabled, false);
+    assert.equal((await f.call(client, 'set_player_disabled', {playerId: admin.id, disabled: true})).raw.isError, true);
+    const names = (await client.listTools()).tools.map(t => t.name);
+    assert.ok(!names.includes('reset_player_password') && !names.includes('revoke_player_sessions'));
     const audit = JSON.stringify(f.store.db.prepare('SELECT * FROM mcp_audit').all());
-    assert.ok(!audit.includes(password)); assert.ok(!audit.includes(credential.secret));
+    assert.ok(!audit.includes(credential.secret));
     assert.match(audit, /PLAYER_NOT_FOUND/);
   } finally {await f.close();}
 });
