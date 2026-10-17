@@ -287,6 +287,10 @@ test('OpenAPI documents generated interfaces and private responses without SPA f
       const r=await f.call('GET',from);assert.equal(r.statusCode,302,from);assert.equal(r.headers.location,to,from);
     }
     assert.equal((await f.call('GET','/%2523/')).statusCode,404);
+    // Frontend files revalidate on every load so a new deploy reaches players through Cloudflare.
+    for(const file of ['/','/app.js','/app.css','/vendor/clerk-boot.js']){
+      const r=await f.call('GET',file);assert.equal(r.statusCode,200,file);assert.equal(r.headers['cache-control'],'no-cache',file);assert.ok(r.headers.etag,file);
+    }
   }finally{await f.close();}
 });
 

@@ -187,8 +187,11 @@ export async function buildApp(c:Config) {
     });
     app.get('/openapi.json',{schema:{hide:true}},async()=>app.swagger());
   }
-  if(existsSync(c.sdkDir))await app.register(serveStatic,{root:c.sdkDir,prefix:'/sdk/',decorateReply:false,cacheControl:false,dotfiles:'deny'});
-  if(existsSync(c.publicDir))await app.register(serveStatic,{root:c.publicDir,prefix:'/',decorateReply:false,cacheControl:false,dotfiles:'deny',
+  // Revalidate (ETag) on every load: games.dkz12345.com sits behind Cloudflare, which otherwise caches
+  // header-less JS/CSS for 4 hours at the edge and in browsers, so a new frontend would not reach players.
+  const revalidate=(reply:FastifyReply)=>{reply.header('Cache-Control','no-cache');};
+  if(existsSync(c.sdkDir))await app.register(serveStatic,{root:c.sdkDir,prefix:'/sdk/',decorateReply:false,cacheControl:false,setHeaders:revalidate,dotfiles:'deny'});
+  if(existsSync(c.publicDir))await app.register(serveStatic,{root:c.publicDir,prefix:'/',decorateReply:false,cacheControl:false,setHeaders:revalidate,dotfiles:'deny',
     allowedPath:file=>!/^\/?(api|play|docs|sdk|openapi\.json|healthz|readyz|_gamehub_internal)(\/|$)/.test(file)});
   app.setNotFoundHandler((req,reply)=>{
     const url=req.url.split('?')[0];
@@ -196,7 +199,7 @@ export async function buildApp(c:Config) {
     // The rest stays percent-encoded; the page's router decodes hash segments itself.
     if(req.method==='GET'&&/^\/%23/i.test(url))return reply.redirect('/#'+url.slice(4),302);
     if(c.spaFallback&&req.method==='GET'&&req.headers.accept?.includes('text/html')&&!/^\/(api|play|docs|sdk|openapi\.json|healthz|readyz|_gamehub_internal)(\/|$)/.test(url)&&existsSync(path.join(c.publicDir,'index.html')))
-      return reply.type('text/html').send(createReadStream(path.join(c.publicDir,'index.html')));
+      return reply.type('text/html').header('Cache-Control','no-cache').send(createReadStream(path.join(c.publicDir,'index.html')));
     return reply.code(404).send({error:{code:'NOT_FOUND',message:'资源不存在'},requestId:req.id});
   });
   await app.ready();
